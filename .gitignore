@@ -9,3 +9,7 @@ wheels/
 # Virtual environments
 .venv
 pyinfra-debug.log
+
+# Offline bundle + join token (large / secret)
+/offline/
+*.tar

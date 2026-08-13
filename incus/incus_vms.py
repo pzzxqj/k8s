@@ -1,36 +1,37 @@
 """pyinfra: batch create/destroy Incus VMs for a k8s lab.
 
+VM specs come from config.py (single source of truth).
+
 Run:
-    uv run --with pyinfra pyinfra @local incus_vms.py                    # create all
-    INCUS_MODE=destroy uv run --with pyinfra pyinfra @local incus_vms.py # destroy all
-    INCUS_VMS=k8s-master uv run --with pyinfra pyinfra @local incus_vms.py
+    uv run pyinfra @local incus/incus_vms.py             # create all
+    INCUS_VMS=k8s-master uv run pyinfra @local incus/incus_vms.py
 """
 
 import os
+import sys
+from pathlib import Path
 
-from pyinfra.context import host
-from pyinfra.facts.server import Command
-from pyinfra.operations import server
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-# ====================== user config ======================
+import config  # noqa: E402
+
+from pyinfra.context import host  # noqa: E402
+from pyinfra.facts.server import Command  # noqa: E402
+from pyinfra.operations import server  # noqa: E402
+
 IMAGE = os.environ.get("INCUS_IMAGE", "images:almalinux/10/cloud")
 NETWORK = os.environ.get("INCUS_NETWORK", "incusbr0")
-USER = os.environ.get("INCUS_USER", "tux")
+USER = os.environ.get("INCUS_USER", config.SSH_USER)
 SSH_PUB_KEY = os.environ.get(
     "INCUS_SSH_KEY", os.path.expanduser("~/.ssh/id_ed25519.pub")
 )
-MODE = os.environ.get("INCUS_MODE", "create")
 VM_SELECT = [x.strip() for x in os.environ.get("INCUS_VMS", "").split(",") if x.strip()]
 LAB_PASSWORD_HASH = os.environ.get(
     "INCUS_PASSWORD_HASH",
     "$6$cmjfM7yK3xEZRLk0$GGVqHsGbqo5KM1GcK7LsHea67v772D/FxDYA9vQQdOJpiM0zJK51VBhzDQaRV6mdLczz8Ls1ic1/zh74PtnUr/",
 )
 
-VMS = {
-    "k8s-master": {"vcpu": 4, "memory": "4GiB", "disk": "20GiB", "ip": "10.98.68.10"},
-    "k8s-worker-1": {"vcpu": 4, "memory": "4GiB", "disk": "20GiB", "ip": "10.98.68.11"},
-    "k8s-worker-2": {"vcpu": 4, "memory": "4GiB", "disk": "20GiB", "ip": "10.98.68.12"},
-}
+VMS = config.VMS
 
 
 def vm_exists(name: str) -> bool:
@@ -62,6 +63,8 @@ write_files:
 runcmd:
   - dnf -y install openssh-server
   - systemctl enable --now sshd
+  - sh -c 'grep -q "^Subsystem sftp" /etc/ssh/sshd_config || echo "Subsystem sftp /usr/libexec/openssh/sftp-server" >> /etc/ssh/sshd_config'
+  - systemctl restart sshd
 """
 
 
@@ -86,17 +89,4 @@ def create_vms():
         server.shell(commands=[f"incus wait {name} agent"], _ignore_errors=True)
 
 
-def destroy_vms():
-    for name in VMS:
-        if VM_SELECT and name not in VM_SELECT:
-            continue
-        if not vm_exists(name):
-            print(f"[skip] {name} not found")
-            continue
-        server.shell(commands=[f"incus delete {name} --force"])
-
-
-if MODE == "destroy":
-    destroy_vms()
-else:
-    create_vms()
+create_vms()
