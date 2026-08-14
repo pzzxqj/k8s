@@ -2,7 +2,7 @@
 
 Run ONLY against the workers, after the master is initialized and the join
 command has been fetched from it into $OFFLINE_DIR/join-command.txt
-(scripts/cluster.sh does this automatically):
+(`just join` does this automatically):
 
     uv run pyinfra -y inventory.py deploy/join.py --limit k8s_workers \
         --user admin --key ~/.ssh/id_ed25519
@@ -24,7 +24,7 @@ JOIN_CMD_SRC = f"{config.OFFLINE_DIR}/join-command.txt"
 
 if not Path(JOIN_CMD_SRC).is_file():
     raise SystemExit(
-        f"[error] {JOIN_CMD_SRC} not found — run cluster.sh or fetch the join "
+        f"[error] {JOIN_CMD_SRC} not found — run `just join` or fetch the join "
         "command from the master first"
     )
 

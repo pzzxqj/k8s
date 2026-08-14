@@ -3,9 +3,9 @@
 Both the pyinfra deploy scripts (deploy/*) and the shell tooling derive their
 values from here. Change a node/IP/memory in ONE place.
 
-Artifact versions (k8s minor, Cilium chart, containerd.io RPM, ...) are pinned
-in scripts/download_offline.py, which resolves the exact k8s patch and writes
-the result into the offline bundle.
+Artifact versions: Cilium chart/CLI are pinned in scripts/download_offline.py; the
+k8s version follows the host's local kubeadm (`kubeadm config images list`) and is
+written into the offline bundle's k8s-version.txt.
 """
 
 import os

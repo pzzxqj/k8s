@@ -5,12 +5,12 @@ Everything the nodes install comes from intranet sources only:
     BaseOS/AppStream mirrored on the internal vm (deploy/repo.py), via
     /etc/yum.repos.d/almalinux-mirror.repo
   * k8s/containerd RPMs -> the same mirror, via kubernetes.repo + docker-ce.repo
-  * container images + Cilium -> the LOCAL offline bundle produced by
-    scripts/download_offline.py and pushed up as /opt/k8s-offline.
+  * container images + Cilium -> the offline bundle at /opt/k8s-offline, already
+    pushed there by scripts/download_offline.py (rsync, no pyinfra).
 
 Workflow:
     uv run pyinfra -y inventory.py deploy/repo.py --limit k8s_repo --user admin
-    uv run python scripts/download_offline.py            # build ./offline on the host
+    uv run python scripts/download_offline.py            # build ./offline + rsync to nodes
     uv run pyinfra -y inventory.py deploy/prepare.py --user admin --key ~/.ssh/id_ed25519
 
 Runs against every node (master + workers). The kubeadm init/join step is
@@ -33,7 +33,7 @@ import config
 is_master = _common.is_master()
 
 # NOTE: the SFTP subsystem is enabled in cloud-init (incus/incus_vms.py); it is
-# required by files.put / files.sync / dnf.repo.
+# required by files.put / dnf.repo.
 
 # 1. Fully intranet dnf: replace the node's online AlmaLinux repos with the
 # internal mirror (repo.py mirrors BaseOS + AppStream), then all of the dnf
@@ -147,15 +147,8 @@ server.shell(
     _sudo=True,
 )
 
-# 7. Upload the offline bundle — still used for container images and the
-# Cilium CLI/chart, but no longer for the k8s/containerd RPM install.
-files.sync(
-    name="Upload offline bundle to nodes",
-    src=config.OFFLINE_DIR,
-    dest=config.NODE_OFFLINE_DIR,
-    delete=False,
-    _sudo=True,
-)
+# 7. The offline bundle (container images, Cilium CLI/chart) was already rsynced
+# to /opt/k8s-offline by scripts/download_offline.py — no upload here.
 
 # 8. Point dnf at the internal repo mirror (deploy/repo.py serves it, see
 # templates/kubernetes.repo.j2) and install containerd.io + kubelet/kubeadm/

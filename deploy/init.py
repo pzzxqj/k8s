@@ -7,7 +7,7 @@ Run ONLY against the master, after deploy/prepare.py:
 
 Idempotent: skips kubeadm init once /etc/kubernetes/admin.conf exists. It also
 writes the worker join command to /etc/kubernetes/join-command.txt so the host
-can fetch it (see scripts/cluster.sh) and feed it to deploy/join.py.
+can fetch it (see `just join`) and feed it to deploy/join.py.
 """
 
 import json
@@ -108,7 +108,7 @@ server.shell(
     ],
 )
 
-# 6. Generate the worker join command (host fetches it via cluster.sh)
+# 6. Generate the worker join command (host fetches it via `just join`)
 server.shell(
     name="Write worker join command to /etc/kubernetes/join-command.txt",
     commands=[

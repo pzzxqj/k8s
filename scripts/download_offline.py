@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
-"""Download everything k8s/containerd/Cilium related onto the HOST, producing an
-offline bundle under ./offline that deploy/prepare.py uploads to the nodes.
+"""Download the container images + Cilium artifacts the cluster needs, producing
+an offline bundle under ./offline and rsyncing it to every node's
+/opt/k8s-offline (upload needs no pyinfra).
 
 k8s/containerd RPMs are installed from the internal repo mirror (deploy/repo.py),
-so they are NOT part of the bundle; container images + Cilium artifacts always
-come from this bundle. Base packages (container-selinux) come from the node's
-ONLINE dnf repos. The exact k8s patch version is resolved by querying the
-mirror's own k8s-src repo with dnf repoquery over ssh.
+so they are NOT part of the bundle; only container images + Cilium artifacts are.
 
-Requires on the host: docker (for image export), ssh access to the mirror VM
-(admin@k8s-repo). HTTP downloads go through httpx.
+The k8s image list comes straight from the LOCAL kubeadm (must match the version
+the mirror serves to the nodes): `kubeadm config images list` emits every image
+kubeadm init/join will reference, so no mirror-side version resolution is needed.
+Before building, the host kubeadm version is verified against the kubelet the
+mirror currently serves (ssh `dnf repoquery` over the mirror's own repodata) and
+aborts on mismatch. Cilium images are a fixed list for the pinned chart version
+(no helm rendering).
 
-    uv run python scripts/download_offline.py            # build ./offline
+Requires on the host: docker (for image export), kubeadm, rsync + ssh access to
+the nodes AND the mirror VM (admin@k8s-repo). HTTP downloads go through httpx.
+
+    uv run python scripts/download_offline.py            # build ./offline + upload
+    uv run python scripts/download_offline.py --no-upload
+    uv run python scripts/download_offline.py --skip-version-check
     OFFLINE_DIR=/path uv run python scripts/download_offline.py
 """
 
@@ -19,8 +27,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -30,53 +38,30 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
-import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-HELM_DIR = Path(tempfile.gettempdir()) / "k8s-offline-helm"
-SHA256_DIGEST = re.compile(r"@sha256:[0-9a-f]{64}")
 
-K8S_CONTROL_PLANE_IMAGES = (
-    "registry.k8s.io/kube-apiserver",
-    "registry.k8s.io/kube-controller-manager",
-    "registry.k8s.io/kube-scheduler",
-)
-K8S_COMMON_IMAGES = ("registry.k8s.io/kube-proxy",)
-K8S_COMMON_PINNED_IMAGES = (
-    "registry.k8s.io/pause:3.10.2",
-    "registry.k8s.io/coredns/coredns:v1.14.2",
-)
-ETCD_IMAGE = "registry.k8s.io/etcd:3.6.8-0"
-
-# Pin the digest exactly as the chart renders it (sanity-checked below).
+# Pin the digest exactly as the chart renders it (fixed list, no helm render).
 CILIUM_IMAGES = (
     "quay.io/cilium/cilium-envoy:v1.37.5-1782911245-7cffc778c923f68a77954a53b1a98d6b5353f004",
 )
+
+MASTER_SCOPED = ("kube-apiserver", "kube-controller-manager", "kube-scheduler", "etcd")
 
 
 @dataclass(frozen=True)
 class Settings:
     offline_dir: Path
-    k8s_minor: str
-    k8s_version: str | None
     cilium_chart_ver: str
     cilium_cli_ver: str
-    helm_ver: str
-    arch: str
-    helm_arch: str
     cilium_arch: str
-
-    def control_plane_images(self, k8s_ver: str) -> list[str]:
-        return [f"{img}:v{k8s_ver}" for img in K8S_CONTROL_PLANE_IMAGES] + [ETCD_IMAGE]
-
-    def common_images(self, k8s_ver: str) -> list[str]:
-        return [f"{img}:v{k8s_ver}" for img in K8S_COMMON_IMAGES] + list(
-            K8S_COMMON_PINNED_IMAGES
-        )
+    ssh_user: str
+    ssh_key: Path
+    mirror_ip: str
 
     def all_cilium_images(self) -> list[str]:
         return [
@@ -86,12 +71,28 @@ class Settings:
         ]
 
 
-def parse_args() -> Settings:
+@dataclass(frozen=True)
+class Options:
+    no_upload: bool = False
+    skip_version_check: bool = False
+
+
+def parse_args() -> tuple[Settings, Options]:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--offline-dir",
         type=Path,
         help="output directory (default: $OFFLINE_DIR or <repo>/offline)",
+    )
+    parser.add_argument(
+        "--no-upload",
+        action="store_true",
+        help="build the bundle but do not rsync it to the nodes",
+    )
+    parser.add_argument(
+        "--skip-version-check",
+        action="store_true",
+        help="do not verify the host kubeadm matches the mirror's k8s version",
     )
     ns = parser.parse_args()
 
@@ -103,16 +104,22 @@ def parse_args() -> Settings:
         ns.offline_dir or os.environ.get("OFFLINE_DIR") or (REPO_ROOT / "offline")
     )
 
-    return Settings(
-        offline_dir=offline_dir,
-        k8s_minor=os.environ.get("K8S_MINOR", "1.36"),
-        k8s_version=os.environ.get("K8S_VERSION"),
-        cilium_chart_ver=os.environ.get("CILIUM_CHART_VER", "1.20.0"),
-        cilium_cli_ver=os.environ.get("CILIUM_CLI_VER", "0.19.7"),
-        helm_ver=os.environ.get("HELM_VER", "3.18.4"),
-        arch=arch,
-        helm_arch="amd64",
-        cilium_arch="amd64",
+    return (
+        Settings(
+            offline_dir=offline_dir,
+            cilium_chart_ver=os.environ.get("CILIUM_CHART_VER", "1.20.0"),
+            cilium_cli_ver=os.environ.get("CILIUM_CLI_VER", "0.19.7"),
+            cilium_arch="amd64",
+            ssh_user=os.environ.get("SSH_USER", config.SSH_USER),
+            ssh_key=Path(
+                os.environ.get("SSH_KEY", str(Path.home() / ".ssh" / "id_ed25519"))
+            ),
+            mirror_ip=os.environ.get("REPO_MIRROR_IP", config.REPO_MIRROR_IP),
+        ),
+        Options(
+            no_upload=ns.no_upload,
+            skip_version_check=ns.skip_version_check,
+        ),
     )
 
 
@@ -141,31 +148,59 @@ def download(client: httpx.Client, url: str, dest: Path) -> None:
 
 
 def setup_layout(settings: Settings) -> None:
-    for sub in ("images", "cilium", "tools"):
+    for sub in ("images", "cilium"):
         (settings.offline_dir / sub).mkdir(parents=True, exist_ok=True)
 
 
-def resolve_k8s_version(settings: Settings) -> str:
-    """Exact k8s patch for K8S_MINOR: $K8S_VERSION or, failing that, resolved
-    from the mirror VM's own k8s-src repo via dnf repoquery over ssh."""
-    if settings.k8s_version:
-        return settings.k8s_version
-    print(f"[*] Resolving latest kubelet patch for v{settings.k8s_minor} ...")
-    ssh_user = os.environ.get("SSH_USER", config.SSH_USER)
-    mirror_ip = os.environ.get("REPO_MIRROR_IP", config.REPO_MIRROR_IP)
-    ssh_key = os.environ.get(
-        "SSH_KEY", str(Path.home() / ".ssh" / "id_ed25519")
+def kubeadm_version() -> str:
+    """Exact k8s version of the LOCAL kubeadm (must match the mirror's RPMs)."""
+    proc = subprocess.run(
+        ["kubeadm", "version", "-o", "json"],
+        check=True,
+        capture_output=True,
+        text=True,
     )
+    return str(json.loads(proc.stdout)["clientVersion"]["gitVersion"])
+
+
+def kubeadm_images() -> list[str]:
+    """Every image kubeadm will reference, from the local kubeadm binary."""
+    proc = subprocess.run(
+        ["kubeadm", "config", "images", "list"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+
+
+def normalize_version(ver: str) -> str:
+    return ver.lstrip("v")
+
+
+def mirror_k8s_version(settings: Settings) -> str:
+    """The k8s version the mirror currently serves (what nodes would install).
+
+    Queries the mirror's OWN repodata (createrepo_c-built) over 127.0.0.1 via an
+    ad-hoc repo, so it reflects what the nodes will actually get. Errors out when
+    the mirror isn't reachable / provisioned — strict by design.
+    """
+    served_base = f"http://127.0.0.1/{config.K8S_REPO_SERVED_PATH}"
     query = (
-        "sudo dnf --disablerepo='*' --enablerepo=k8s-src -q "
-        "repoquery --latest-limit 1 --qf '%{VERSION}' kubelet"
+        "sudo dnf --disablerepo='*' "
+        f"--enablerepo=served --repofrompath=served,{served_base} "
+        "-q repoquery --latest-limit 1 --qf '%{VERSION}' kubelet"
     )
     proc = subprocess.run(
         [
-            "ssh", "-i", ssh_key,
-            "-o", "StrictHostKeyChecking=no",
-            "-o", "ConnectTimeout=10",
-            f"{ssh_user}@{mirror_ip}",
+            "ssh",
+            "-i",
+            str(settings.ssh_key),
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "ConnectTimeout=10",
+            f"{settings.ssh_user}@{settings.mirror_ip}",
             query,
         ],
         check=False,
@@ -174,11 +209,33 @@ def resolve_k8s_version(settings: Settings) -> str:
     )
     if proc.returncode != 0:
         sys.exit(
-            f"[error] dnf repoquery on {ssh_user}@{mirror_ip} failed: "
-            f"{proc.stderr.strip()} (is deploy/repo.py provisioned?)"
+            f"[error] 无法查询镜像源 k8s 版本 ({settings.ssh_user}@{settings.mirror_ip}): "
+            f"{proc.stderr.strip()} - 请先运行 deploy/repo.py, 或加 --skip-version-check"
         )
-    version = proc.stdout.strip().splitlines()[-1].strip()
-    return version
+    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    if not lines:
+        sys.exit(
+            "[error] 镜像源 k8s repo 中未找到 kubelet 记录 (同步未完成?) - "
+            "请先运行 deploy/repo.py, 或加 --skip-version-check"
+        )
+    return lines[-1]
+
+
+def check_k8s_version(settings: Settings) -> None:
+    local_ver = normalize_version(kubeadm_version())
+    mirror_ver = normalize_version(mirror_k8s_version(settings))
+    if local_ver != mirror_ver:
+        sys.exit(
+            f"[error] 宿主机 kubeadm 版本 ({local_ver}) 与镜像源 ({mirror_ver}) 不一致, "
+            "节点装到的 kubeadm 会引用不存在的预载镜像. "
+            "请升级宿主机 kubeadm 或先同步镜像源, 或加 --skip-version-check"
+        )
+    print(f"[*] 版本校验通过: {local_ver} == {mirror_ver}")
+
+
+def scope_for(image: str) -> str:
+    """'master' = control-plane-only image; 'all' = every node needs it."""
+    return "master" if any(name in image for name in MASTER_SCOPED) else "all"
 
 
 def download_cilium_artifacts(settings: Settings, client: httpx.Client) -> None:
@@ -225,100 +282,6 @@ def extract_archive_member(tarball: Path, member_name: str, dest: Path) -> None:
     dest.chmod(0o755)
 
 
-def ensure_helm(settings: Settings, client: httpx.Client) -> Path | None:
-    helm_bin = HELM_DIR / "helm"
-    if helm_bin.is_file():
-        return helm_bin
-    try:
-        tarball = HELM_DIR / "helm.tar.gz"
-        download(
-            client,
-            f"https://get.helm.sh/helm-v{settings.helm_ver}-linux-{settings.helm_arch}.tar.gz",
-            tarball,
-        )
-        extract_archive_member(tarball, f"linux-{settings.helm_arch}/helm", helm_bin)
-        return helm_bin
-    except (httpx.HTTPError, OSError, KeyError, EOFError) as exc:
-        print(
-            f"[!] helm unavailable ({exc}), using pinned Cilium image list",
-            file=sys.stderr,
-        )
-        return None
-
-
-def render_cilium_images(
-    helm_bin: Path,
-    chart_dir: Path,
-) -> list[str] | None:
-    rendered = subprocess.run(
-        [
-            str(helm_bin),
-            "template",
-            "kube-system",
-            str(chart_dir),
-            "-n",
-            "kube-system",
-            "--set",
-            "kubeProxyReplacement=false",
-            "--set",
-            "operator.replicas=1",
-            "--set",
-            "hubble.enabled=false",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if rendered.returncode != 0:
-        print(f"[!] helm template failed: {rendered.stderr.strip()}", file=sys.stderr)
-        return None
-    return parse_image_refs(rendered.stdout)
-
-
-def parse_image_refs(rendered_yaml: str) -> list[str]:
-    """Collect every `image:` string out of the rendered (multi-doc) manifests."""
-    images: set[str] = set()
-    for doc in yaml.safe_load_all(rendered_yaml):
-        walk_images(doc, images)
-    return sorted(images)
-
-
-def walk_images(node: object, acc: set[str]) -> None:
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key == "image" and isinstance(value, str):
-                acc.add(value)
-            else:
-                walk_images(value, acc)
-    elif isinstance(node, list):
-        for item in node:
-            walk_images(item, acc)
-
-
-def strip_digest(ref: str) -> str:
-    return SHA256_DIGEST.sub("", ref)
-
-
-def sanity_check_cilium_images(settings: Settings, rendered: list[str] | None) -> None:
-    if not rendered:
-        return
-    expected = {strip_digest(img) for img in rendered}
-    pinned = set(settings.all_cilium_images())
-    for img in sorted(pinned - expected):
-        print(
-            (
-                f"[!] Cilium image '{img}' not in rendered chart list — "
-                "check CILIUM_IMAGES"
-            ),
-            file=sys.stderr,
-        )
-    for img in sorted(expected - pinned):
-        print(
-            f"[!] chart renders extra Cilium image '{img}' — add it to CILIUM_IMAGES",
-            file=sys.stderr,
-        )
-
-
 def safe_image_name(ref: str) -> str:
     return ref.translate(str.maketrans("/:", "--"))
 
@@ -332,34 +295,24 @@ def docker_pull_save(ref: str, dest: Path) -> None:
     subprocess.run(["docker", "save", "-o", str(dest), ref], check=True)
 
 
-def write_image_plan(settings: Settings, k8s_ver: str) -> None:
+def write_image_plan(settings: Settings, k8s_imgs: list[str]) -> None:
     images_dir = settings.offline_dir / "images"
-    control = settings.control_plane_images(k8s_ver)
-    common = settings.common_images(k8s_ver)
     cilium = settings.all_cilium_images()
 
-    all_images = sorted(set(control) | set(common) | set(cilium))
+    all_images = sorted(set(k8s_imgs) | set(cilium))
     (images_dir / "images.txt").write_text("".join(f"{img}\n" for img in all_images))
-    (settings.offline_dir / "k8s-version.txt").write_text(f"v{k8s_ver}\n")
 
     # "master" images only go on the control-plane node; the rest on every node.
-    plan = [f"master {img}" for img in control]
-    plan += [f"all {img}" for img in common + cilium]
+    plan = [f"{scope_for(img)} {img}" for img in k8s_imgs]
+    plan += [f"all {img}" for img in cilium]
     (images_dir / "import-plan.txt").write_text("".join(f"{line}\n" for line in plan))
 
-    for scope, images in (
-        ("control-plane", control),
-        ("common", common),
-        ("cilium", cilium),
-    ):
-        print(
-            f"[*] Pulling + saving {scope} container images (this can take a while) ..."
-        )
-        for img in images:
-            fname = safe_image_name(img)
-            if scope == "control-plane":
-                fname = f"master-{fname}"
-            docker_pull_save(img, images_dir / f"{fname}.tar")
+    print("[*] Pulling + saving container images (this can take a while) ...")
+    for img in sorted(all_images):
+        fname = safe_image_name(img)
+        if scope_for(img) == "master":
+            fname = f"master-{fname}"
+        docker_pull_save(img, images_dir / f"{fname}.tar")
 
 
 def write_manifest(offline_dir: Path) -> None:
@@ -373,37 +326,47 @@ def write_manifest(offline_dir: Path) -> None:
             fh.write(f"{digest}  ./{p.relative_to(offline_dir)}\n")
 
 
+def rsync_args(settings: Settings) -> list[str]:
+    return [
+        "rsync",
+        "-az",
+        "--rsync-path=sudo rsync",
+        "-e",
+        (
+            "ssh -i "
+            f"{shlex_quote(str(settings.ssh_key))} "
+            "-o StrictHostKeyChecking=accept-new"
+        ),
+    ]
+
+
+def shlex_quote(s: str) -> str:
+    return "'" + s.replace("'", "'\\''") + "'"
+
+
+def upload_offline(settings: Settings) -> None:
+    src = f"{settings.offline_dir}/"
+    for node in config.ALL_NODES:
+        dest = f"{settings.ssh_user}@{node}:{config.NODE_OFFLINE_DIR}/"
+        print(f"[*] rsync bundle -> {dest}")
+        subprocess.run([*rsync_args(settings), src, dest], check=True)
+
+
 def main() -> int:
-    settings = parse_args()
+    settings, options = parse_args()
     setup_layout(settings)
 
-    k8s_ver = resolve_k8s_version(settings)
-    print(f"[*] Kubernetes version: v{k8s_ver}")
+    k8s_ver = kubeadm_version()
+    k8s_imgs = kubeadm_images()
+    print(f"[*] Kubernetes version: {k8s_ver}")
+    if not options.skip_version_check:
+        check_k8s_version(settings)
+    (settings.offline_dir / "k8s-version.txt").write_text(f"{k8s_ver}\n")
 
     with new_client() as client:
         download_cilium_artifacts(settings, client)
 
-        print("[*] Downloading helm (host-side, for image-list resolution) ...")
-        helm_bin = ensure_helm(settings, client)
-
-    cilium_images_dir = settings.offline_dir / "images"
-    chart_dir = settings.offline_dir / "cilium" / "chart"
-    if helm_bin and chart_dir.is_dir():
-        rendered = render_cilium_images(helm_bin, chart_dir)
-        if rendered is not None:
-            tags = [strip_digest(img) for img in rendered]
-            (cilium_images_dir / "cilium-images.txt").write_text(
-                "".join(f"{img}\n" for img in rendered)
-            )
-            (cilium_images_dir / "cilium-images.tags.txt").write_text(
-                "".join(f"{img}\n" for img in sorted(set(tags)))
-            )
-            print("[*] Cilium images required:")
-            for img in sorted(set(tags)):
-                print(img)
-            sanity_check_cilium_images(settings, rendered)
-
-    write_image_plan(settings, k8s_ver)
+    write_image_plan(settings, k8s_imgs)
     write_manifest(settings.offline_dir)
 
     du = subprocess.run(
@@ -415,6 +378,11 @@ def main() -> int:
     print(f"\n[*] Done. Bundle: {settings.offline_dir}")
     if du.returncode == 0:
         print(du.stdout.strip())
+
+    if options.no_upload:
+        print("[*] Skipped upload (--no-upload)")
+    else:
+        upload_offline(settings)
 
     return 0
 
