@@ -31,11 +31,14 @@ K8S_REPO_SERVED_PATH = f"k8s/core:/stable:/v{K8S_MINOR}/rpm"
 DOCKER_REPO_SERVED_PATH = "docker/linux/centos/10/x86_64/stable"
 # Mirrored AlmaLinux 10 necessary packages (deps close over NJU mirror). The
 # nodes install only kernel-modules-extra + container-selinux from Alma sources,
-# so we mirror just those two (with their full dependency closure) into a single
-# combined repo, keeping the mirror small for this lab. NJU chosen over ZJU
-# (measured ~10 MB/s vs ~43 KB/s from this network).
+# so we mirror just those two (with their full dependency closure), served under
+# the canonical Alma layout BaseOS/<arch>/os + AppStream/<arch>/os so the nodes
+# can keep their original .repo files and only swap the baseurl host. NJU chosen
+# over ZJU (measured ~10 MB/s vs ~43 KB/s from this network).
 ALMA_UPSTREAM_BASE = "https://mirrors.nju.edu.cn/almalinux"
-ALMA_SERVED_PATH = "alma/10"
+# Served base dir (subrepos BaseOS/<arch>/os + AppStream/<arch>/os underneath).
+ALMA_SERVED_PATH = "almalinux/10"
+ALMA_ARCH = "x86_64"
 
 # ---------- topology ----------
 MASTER_HOSTNAME = "k8s-master"

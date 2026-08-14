@@ -88,6 +88,7 @@ files.template(
     k8s_dest=K8S_DEST,
     docker_dest=DOCKER_DEST,
     alma_dest=ALMA_DEST,
+    alma_arch=config.ALMA_ARCH,
     k8s_minor=config.K8S_MINOR,
     _sudo=True,
 )
@@ -172,7 +173,9 @@ server.shell(
             "  echo -n '.'; sleep 5; "
             "done; echo; "
             f"grep -q '== done ==' {LOG_FILE} || echo '[warn] sync did not finish; see {LOG_FILE}' >&2; "
-            f"for path in {config.K8S_REPO_SERVED_PATH} {config.ALMA_SERVED_PATH}; do "
+            f"for path in {config.K8S_REPO_SERVED_PATH} "
+            f"{config.ALMA_SERVED_PATH}/BaseOS/{config.ALMA_ARCH}/os "
+            f"{config.ALMA_SERVED_PATH}/AppStream/{config.ALMA_ARCH}/os; do "
             "  curl -fsS -o /dev/null -w '$path %{http_code}\\n' "
             "  http://127.0.0.1/$path/repodata/repomd.xml || echo '[warn] $path not served' >&2; "
             "done"

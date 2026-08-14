@@ -64,7 +64,7 @@ runcmd:
   - sed -i -e 's|^mirrorlist=|# mirrorlist=|' -e 's|^# baseurl=https://repo.almalinux.org/almalinux/|baseurl={config.ALMA_UPSTREAM_BASE}/|' /etc/yum.repos.d/almalinux-*.repo
   - dnf clean all
   - dnf -y upgrade
-  - dnf -y install openssh-server
+  - dnf -y install rsync openssh-server
   - systemctl enable --now sshd
   - sh -c 'grep -q "^Subsystem sftp" /etc/ssh/sshd_config || echo "Subsystem sftp /usr/libexec/openssh/sftp-server" >> /etc/ssh/sshd_config'
   - systemctl restart sshd

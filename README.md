@@ -19,7 +19,7 @@ k8s/containerd 组件通过 **内网 dnf 镜像源**（k8s-repo）安装；容�
 - **k8s RPM**（kubelet/kubeadm/kubectl/cri-tools/kubernetes-cni）→ 内网镜像 `http://10.98.68.13/k8s/core:/stable:/v1.36/rpm/`（`k8s-repo` 从 pkgs.k8s.io `dnf reposync` 同步，`repo-sync.timer` 每日更新）
 - **containerd.io 2.3.3** → 内网镜像 `http://10.98.68.13/docker/linux/centos/10/x86_64/stable/`
 - **容器镜像 + Cilium CLI/chart** → 离线包 `./offline`（images/ 预载到 containerd；`download_offline.py` 用 rsync 直接推到各节点 `/opt/k8s-offline`，不经 pyinfra）
-- **系统基础包**（container-selinux 等）→ 节点在线 Alma 仓库（VM 创建时 cloud-init 已把仓库指向 NJU 镜像 mirrors.nju.edu.cn，与 deploy/repo.py 一致）
+- **系统基础包**（kernel-modules-extra、container-selinux 等）→ 镜像 `k8s-repo` 的 `almalinux/10/BaseOS|AppStream/` 规范布局子 repo（仅镜像所需包及其依赖闭包；节点保留原始 `almalinux-*.repo`，仅把 baseurl 指到内网镜像）
 
 ## 目录结构
 

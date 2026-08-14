@@ -10,7 +10,7 @@ DOCKER_DEST={{ docker_dest }}
 ALMA_DEST={{ alma_dest }}
 K8S_KEY_URL="https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/rpm/repodata/repomd.xml.key"
 DOCKER_KEY_URL="https://download.docker.com/linux/centos/gpg"
-ARCH=x86_64
+ARCH={{ alma_arch }}
 
 # reposync used to create a <repoid> subdir in the download path; migrate any
 # such stale layout by moving its contents up (keeps already-downloaded RPMs).
@@ -63,18 +63,44 @@ retry_n 5 dnf reposync "${DNFSETOPTS[@]}" --repoid=docker-src --norepopath \
     --arch "$ARCH" --newest-only --downloaddir="$DOCKER_DEST"
 createrepo_c --update "$DOCKER_DEST"
 
-echo "==[alma]== downloading necessary packages + deps ($ALMA_DEST)"
-mkdir -p "$ALMA_DEST"
+echo "==[alma]== syncing necessary packages + deps to canonical BaseOS/AppStream layout ($ALMA_DEST)"
+BASEOS_DEST="$ALMA_DEST/BaseOS/$ARCH/os"
+APPSTREAM_DEST="$ALMA_DEST/AppStream/$ARCH/os"
+mkdir -p "$BASEOS_DEST" "$APPSTREAM_DEST"
+# Drop stale rpms so a changed kernel/version set never leaves orphans behind
+# (e.g. kernel-debug-* from an earlier kernel) polluting the served repos.
+find "$ALMA_DEST" -name '*.rpm' -delete
 # Only the packages the nodes install from Alma sources (see prepare.py), with
 # their full dependency closure. `uname -r` is the kernel ALL lab VMs share
 # (same cloud image); if a node's kernel ever differs, bump this list.
+# iptables-nft satisfies kubelet's `iptables >= 1.4.21` requirement on Alma 10.
 # Resolve strictly against the VM's own baseos/appstream repos, which repo.py
-# has pointed at the NJU upstream mirror.
-retry_n 5 dnf download --resolve \
+# has pointed at the NJU upstream mirror. Download into a scratch dir, then
+# classify each rpm by source repo so the mirror keeps the canonical layout.
+ALMA_TMP="$(mktemp -d)"
+# install_weak_deps=0: iptables-nft ships conditional weak deps
+# (kernel-debug-*-core/modules-core, ...) that dnf --resolve would otherwise
+# pull in wholesale; the nodes only need the strict dep closure.
+retry_n 5 dnf download --resolve --setopt=install_weak_deps=0 \
     --disablerepo='*' --enablerepo=baseos --enablerepo=appstream \
-    --destdir="$ALMA_DEST" \
-    "kernel-modules-extra-$(uname -r)" container-selinux
-createrepo_c --update "$ALMA_DEST"
+    --destdir="$ALMA_TMP" \
+    "kernel-modules-extra-$(uname -r)" container-selinux iptables-nft
+dnf --disablerepo='*' --enablerepo=baseos -q repoquery --qf='%{NAME}\n' -a | sort -u > "$ALMA_TMP/baseos.names"
+dnf --disablerepo='*' --enablerepo=appstream -q repoquery --qf='%{NAME}\n' -a | sort -u > "$ALMA_TMP/appstream.names"
+for rpm in "$ALMA_TMP"/*.rpm; do
+    name="$(rpm -qp --qf '%{NAME}' "$rpm" 2>/dev/null)"
+    if grep -Fxq "$name" "$ALMA_TMP/baseos.names"; then
+        mv "$rpm" "$BASEOS_DEST/"
+    elif grep -Fxq "$name" "$ALMA_TMP/appstream.names"; then
+        mv "$rpm" "$APPSTREAM_DEST/"
+    else
+        echo "[warn] $name not found in baseos/appstream; defaulting to AppStream" >&2
+        mv "$rpm" "$APPSTREAM_DEST/"
+    fi
+done
+rm -rf "$ALMA_TMP"
+createrepo_c --update "$BASEOS_DEST"
+createrepo_c --update "$APPSTREAM_DEST"
 
 echo "==[keys]== serving GPG keys from the mirror"
 mkdir -p "$K8S_DEST/repodata"

@@ -2,8 +2,8 @@
 
 Everything the nodes install comes from intranet sources only:
   * AlmaLinux base packages (kernel-modules-extra, container-selinux, ...) ->
-    BaseOS/AppStream mirrored on the internal vm (deploy/repo.py), via
-    /etc/yum.repos.d/almalinux-mirror.repo
+    BaseOS/AppStream mirrored on the internal vm (deploy/repo.py), via the
+    original /etc/yum.repos.d/almalinux-*.repo files re-pointed at the mirror
   * k8s/containerd RPMs -> the same mirror, via kubernetes.repo + docker-ce.repo
   * container images + Cilium -> the offline bundle at /opt/k8s-offline, already
     pushed there by scripts/download_offline.py (rsync, no pyinfra).
@@ -35,25 +35,37 @@ is_master = _common.is_master()
 # NOTE: the SFTP subsystem is enabled in cloud-init (incus/incus_vms.py); it is
 # required by files.put / dnf.repo.
 
-# 1. Fully intranet dnf: replace the node's online AlmaLinux repos with the
-# internal mirror (repo.py mirrors BaseOS + AppStream), then all of the dnf
-# installs below (kernel-modules-extra, container-selinux, ...) resolve from
-# the mirror only. The original files are moved aside (not deleted) so the
-# change is reversible; `mv` globbing nothing on re-runs is a no-op.
+# 1. Fully intranet dnf: keep the node's original almalinux-*.repo files (which
+# preserve per-repo layout, module metadata and the disabled debug/source
+# sections) but comment their mirrorlist and point baseurl at the internal
+# mirror (repo.py mirrors the canonical BaseOS/AppStream layout, so only the
+# host prefix changes). Idempotent: once the NJU/repo.almalinux.org baseurl is
+# swapped, the pattern no longer matches on re-runs. cloud-init already
+# commented mirrorlist + pointed baseurl at NJU; we override that here.
+alma_mirror_prefix = f"{config.REPO_MIRROR_URL}/{config.ALMA_SERVED_PATH.split('/', 1)[0]}"
 server.shell(
-    name="Disable online AlmaLinux repo files",
+    name="Point the original AlmaLinux repo files at the internal mirror",
     commands=[
-        "mkdir -p /etc/yum.repos.d/online-backup",
-        "mv -f /etc/yum.repos.d/almalinux-*.repo /etc/yum.repos.d/online-backup/ || true",
+        (
+            "sed -i "
+            "-e 's|^mirrorlist=|# mirrorlist=|' "
+            f"-e 's|^baseurl={config.ALMA_UPSTREAM_BASE}/|baseurl={alma_mirror_prefix}/|' "
+            f"-e 's|^baseurl=https://repo.almalinux.org/almalinux/|baseurl={alma_mirror_prefix}/|' "
+            "/etc/yum.repos.d/almalinux-*.repo"
+        ),
+        # The mirror only serves BaseOS + AppStream; keep those enabled but
+        # disable the primary section of every other Alma repo (crb, extras,
+        # ...) so dnf doesn't fail on their (non-mirrored) 404 paths. Idempotent:
+        # `enabled=1` is only ever flipped once; files with no enabled=1 are
+        # left untouched. baseos/appstream files are skipped entirely.
+        (
+            "for f in /etc/yum.repos.d/almalinux-*.repo; do "
+            "  case \"$f\" in *baseos*|*appstream*) continue;; esac; "
+            "  sed -i '0,/^enabled=1$/s//enabled=0/' \"$f\"; "
+            "done"
+        ),
+        "dnf clean all",
     ],
-    _sudo=True,
-)
-files.template(
-    name="Point AlmaLinux necessary packages at the internal mirror",
-    src=str(config.REPO_ROOT / "templates" / "almalinux-mirror.repo.j2"),
-    dest="/etc/yum.repos.d/almalinux-mirror.repo",
-    mirror_url=config.REPO_MIRROR_URL,
-    alma_path=config.ALMA_SERVED_PATH,
     _sudo=True,
 )
 
@@ -152,8 +164,8 @@ server.shell(
 
 # 8. Point dnf at the internal repo mirror (deploy/repo.py serves it, see
 # templates/kubernetes.repo.j2) and install containerd.io + kubelet/kubeadm/
-# kubectl from there. All base deps already resolve from the mirror via
-# /etc/yum.repos.d/almalinux-mirror.repo. Skipped when kubelet is already
+# kubectl from there. All base deps already resolve from the mirror via the
+# re-pointed almalinux-*.repo files above. Skipped when kubelet is already
 # present so re-running prep never reinstalls/restarts the runtime.
 def rpm_db_has(pkg: str) -> bool:
     return (
