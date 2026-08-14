@@ -73,10 +73,16 @@ find "$ALMA_DEST" -name '*.rpm' -delete
 # Only the packages the nodes install from Alma sources (see prepare.py), with
 # their full dependency closure. `uname -r` is the kernel ALL lab VMs share
 # (same cloud image); if a node's kernel ever differs, bump this list.
-# iptables-nft satisfies kubelet's `iptables >= 1.4.21` requirement on Alma 10.
+# iptables-nft satisfies kubelet's `iptables >= 1.4.21` requirement on Alma 10;
+# nftables provides the `nft` CLI for inspecting/verifying the kube-proxy
+# nftables ruleset from the host.
 # Resolve strictly against the VM's own baseos/appstream repos, which repo.py
 # has pointed at the NJU upstream mirror. Download into a scratch dir, then
 # classify each rpm by source repo so the mirror keeps the canonical layout.
+# The dep list after the leaves is explicit: `dnf download --resolve` skips
+# deps that are ALREADY INSTALLED on the mirror VM (libnftnl/iptables-libs/
+# jansson/libmnl/gmp/readline/... are base-system packages there), which would
+# leave the nodes without them; naming them forces the download anyway.
 ALMA_TMP="$(mktemp -d)"
 # install_weak_deps=0: iptables-nft ships conditional weak deps
 # (kernel-debug-*-core/modules-core, ...) that dnf --resolve would otherwise
@@ -84,7 +90,9 @@ ALMA_TMP="$(mktemp -d)"
 retry_n 5 dnf download --resolve --setopt=install_weak_deps=0 \
     --disablerepo='*' --enablerepo=baseos --enablerepo=appstream \
     --destdir="$ALMA_TMP" \
-    "kernel-modules-extra-$(uname -r)" container-selinux iptables-nft
+    "kernel-modules-extra-$(uname -r)" container-selinux iptables-nft nftables \
+    iptables-libs libnftnl libmnl libnetfilter_conntrack libnfnetlink \
+    jansson gmp readline
 dnf --disablerepo='*' --enablerepo=baseos -q repoquery --qf='%{NAME}\n' -a | sort -u > "$ALMA_TMP/baseos.names"
 dnf --disablerepo='*' --enablerepo=appstream -q repoquery --qf='%{NAME}\n' -a | sort -u > "$ALMA_TMP/appstream.names"
 for rpm in "$ALMA_TMP"/*.rpm; do
@@ -104,8 +112,8 @@ createrepo_c --update "$APPSTREAM_DEST"
 
 echo "==[keys]== serving GPG keys from the mirror"
 mkdir -p "$K8S_DEST/repodata"
-curl -fsSL -o "$K8S_DEST/repodata/repomd.xml.key" "$K8S_KEY_URL" || echo "[warn] k8s gpg key fetch failed"
-curl -fsSL -o "$DOCKER_DEST/gpg" "$DOCKER_KEY_URL" || echo "[warn] docker gpg key fetch failed"
+retry_n 5 curl -fsSL -o "$K8S_DEST/repodata/repomd.xml.key" "$K8S_KEY_URL" || echo "[warn] k8s gpg key fetch failed"
+retry_n 5 curl -fsSL -o "$DOCKER_DEST/gpg" "$DOCKER_KEY_URL" || echo "[warn] docker gpg key fetch failed"
 
 echo "==[selinux]== relabel served tree for nginx"
 chcon -R -t httpd_sys_content_t "$REPO_ROOT" 2>/dev/null || true

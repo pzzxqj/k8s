@@ -93,6 +93,9 @@ server.shell(
 # 5. Install Cilium CNI (offline: chart is local, images already preloaded).
 # Run as {config.SSH_USER} so the CLI picks up ~/.kube/config. The inline check makes this
 # idempotent without depending on pyinfra's fact cache.
+# useDigest=false: the 1.20 chart pins image digests (@sha256:), but our bundle
+# imports images by tag only (docker save + ctr import registers tags, not repo
+# digests), so containerd can't resolve the digest refs offline -> ImagePullBackOff.
 server.shell(
     name="Install Cilium CNI from local chart",
     commands=[
@@ -103,7 +106,10 @@ server.shell(
             "--chart-directory /opt/k8s-offline/cilium/chart "
             "--set kubeProxyReplacement=false "
             "--set operator.replicas=1 "
-            "--set hubble.enabled=false"
+            "--set hubble.enabled=false "
+            "--set image.useDigest=false "
+            "--set operator.image.useDigest=false "
+            "--set envoy.image.useDigest=false"
         ),
     ],
 )

@@ -194,9 +194,9 @@ files.template(
     _sudo=True,
 )
 server.shell(
-    name="Install containerd.io + k8s RPMs from the internal mirror",
+    name="Install containerd.io + k8s RPMs + nftables from the internal mirror",
     commands=[
-        "dnf install -y kubelet kubeadm kubectl cri-tools kubernetes-cni containerd.io"
+        "dnf install -y kubelet kubeadm kubectl cri-tools kubernetes-cni containerd.io nftables"
     ],
     _sudo=True,
     _if=lambda: not rpm_db_has("kubelet"),

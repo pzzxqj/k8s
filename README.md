@@ -20,6 +20,7 @@ k8s/containerd 组件通过 **内网 dnf 镜像源**（k8s-repo）安装；容�
 - **containerd.io 2.3.3** → 内网镜像 `http://10.98.68.13/docker/linux/centos/10/x86_64/stable/`
 - **容器镜像 + Cilium CLI/chart** → 离线包 `./offline`（images/ 预载到 containerd；`download_offline.py` 用 rsync 直接推到各节点 `/opt/k8s-offline`，不经 pyinfra）
 - **系统基础包**（kernel-modules-extra、container-selinux 等）→ 镜像 `k8s-repo` 的 `almalinux/10/BaseOS|AppStream/` 规范布局子 repo（仅镜像所需包及其依赖闭包；节点保留原始 `almalinux-*.repo`，仅把 baseurl 指到内网镜像）
+- **kube-proxy** → kubeadm 默认 iptables 代理模式。注：曾尝试原生 nftables 代理模式（`kubeProxy.config.mode: nftables`，kubeadm v1beta4 中作独立文档），实测会破坏节点出站网络（kube-proxy 生成的 nft 表导致节点无法出站，flush 即恢复），故保留 iptables 模式；节点 `iptables-nft` 满足 kubelet 的 iptables 依赖，另装 `nftables` 包提供 `nft` CLI 以便排查规则
 
 ## 目录结构
 
