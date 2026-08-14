@@ -24,10 +24,8 @@ JOIN_CMD_SRC = f"{config.OFFLINE_DIR}/join-command.txt"
 
 if not Path(JOIN_CMD_SRC).is_file():
     raise SystemExit(
-        (
-            f"[error] {JOIN_CMD_SRC} not found — run cluster.sh or fetch the join "
-            "command from the master first"
-        )
+        f"[error] {JOIN_CMD_SRC} not found — run cluster.sh or fetch the join "
+        "command from the master first"
     )
 
 # kubelet.conf is 0600 root, so check existence via sudo rather than reading it

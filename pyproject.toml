@@ -19,8 +19,8 @@ dependencies = [
 [tool.uv]
 package = false
 
-# E4/E7/E9/F match ruff's default; +I (imports), ISC (implicit string concat),
-# RUF. Note: ruff's E402 exempts `sys.path` modifications, so the deploy/*
-# bootstrap (imports after sys.path.insert) needs no `# noqa`.
+# Extend ruff's default rules (E4/E7/E9/F) with imports (I), implicit string
+# concat (ISC) and RUF. Note: ruff's E402 exempts `sys.path` modifications, so
+# the deploy/* bootstrap (imports after sys.path.insert) needs no `# noqa`.
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I", "ISC", "RUF"]
+extend-select = ["I", "ISC", "RUF"]

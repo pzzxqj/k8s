@@ -28,7 +28,7 @@ SSH_PUB_KEY = os.environ.get(
 VM_SELECT = [x.strip() for x in os.environ.get("INCUS_VMS", "").split(",") if x.strip()]
 LAB_PASSWORD_HASH = os.environ.get(
     "INCUS_PASSWORD_HASH",
-    "admin@123",
+    "$y$j9T$TMrD0j/ZK8z8F60V05ofg/$XSzPAyAlm5HnFtT.Qu5VZNXXFes8yURGL1.RBGfsQt/",
 )
 
 VMS = config.VMS
