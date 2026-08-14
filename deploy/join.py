@@ -5,7 +5,7 @@ command has been fetched from it into $OFFLINE_DIR/join-command.txt
 (scripts/cluster.sh does this automatically):
 
     uv run pyinfra -y inventory.py deploy/join.py --limit k8s_workers \
-        --user tux --key ~/.ssh/id_ed25519
+        --user admin --key ~/.ssh/id_ed25519
 
 Idempotent: skips a node once /etc/kubernetes/kubelet.conf exists.
 """

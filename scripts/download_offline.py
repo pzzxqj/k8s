@@ -2,12 +2,15 @@
 """Download everything k8s/containerd/Cilium related onto the HOST, producing an
 offline bundle under ./offline that deploy/prepare.py uploads to the nodes.
 
-Nodes only ever install from these local files; everything else (base packages
-like container-selinux) comes from the node's ONLINE dnf repos.
+k8s/containerd RPMs are installed from the internal repo mirror (deploy/repo.py),
+so they are NOT part of the bundle unless you pass --no-rpms to skip them;
+container images + Cilium artifacts always come from this bundle. Base packages
+(container-selinux) come from the node's ONLINE dnf repos.
 
 Requires on the host: docker (for image export). HTTP downloads go through httpx.
 
     uv run python scripts/download_offline.py            # build ./offline
+    uv run python scripts/download_offline.py --no-rpms   # RPMs come from the mirror
     OFFLINE_DIR=/path uv run python scripts/download_offline.py
 """
 
@@ -71,6 +74,7 @@ class Settings:
     docker_arch: str
     helm_arch: str
     cilium_arch: str
+    no_rpms: bool = False
 
     @property
     def pkgs_base(self) -> str:
@@ -99,6 +103,14 @@ def parse_args() -> Settings:
         type=Path,
         help="output directory (default: $OFFLINE_DIR or <repo>/offline)",
     )
+    parser.add_argument(
+        "--no-rpms",
+        action="store_true",
+        help=(
+            "skip k8s/containerd RPM download — they are now installed from the "
+            "internal repo mirror (deploy/repo.py), not from the offline bundle"
+        ),
+    )
     ns = parser.parse_args()
 
     arch = os.environ.get("ARCH", "x86_64")
@@ -123,6 +135,7 @@ def parse_args() -> Settings:
         docker_arch="x86_64",
         helm_arch="amd64",
         cilium_arch="amd64",
+        no_rpms=ns.no_rpms,
     )
 
 
@@ -490,8 +503,9 @@ def main() -> int:
         k8s_ver = resolve_k8s_version(settings, repo)
         print(f"[*] Kubernetes version: v{k8s_ver}")
 
-        print("[*] Downloading k8s RPMs ...")
-        download_k8s_rpms(settings, repo, client, k8s_ver)
+        if not settings.no_rpms:
+            print("[*] Downloading k8s RPMs ...")
+            download_k8s_rpms(settings, repo, client, k8s_ver)
 
         download_cilium_artifacts(settings, client)
 

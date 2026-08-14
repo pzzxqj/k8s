@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Sync the internal RPM mirror from upstream. Idempotent; run by
+# repo-sync.timer (daily) and manually:
+#   sudo /usr/local/bin/repo-sync.sh
+set -euo pipefail
+
+REPO_ROOT={{ mirror_root }}
+K8S_DEST={{ k8s_dest }}
+DOCKER_DEST={{ docker_dest }}
+K8S_KEY_URL="https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/rpm/repodata/repomd.xml.key"
+DOCKER_KEY_URL="https://download.docker.com/linux/centos/gpg"
+ARCH=x86_64
+
+# reposync used to create a <repoid> subdir in the download path; migrate any
+# such stale layout by moving its contents up (keeps already-downloaded RPMs).
+migrate() { # dest repoid
+    local dest="$1" repoid="$2"
+    if [ -d "$dest/$repoid" ]; then
+        mv "$dest/$repoid"/* "$dest/" 2>/dev/null || true
+        rmdir "$dest/$repoid" 2>/dev/null || true
+    fi
+}
+
+trim_other_archs() { # dest  (keep $ARCH only, never touch repodata)
+    local dest="$1"
+    find "$dest" -mindepth 1 -maxdepth 1 -type d \
+        ! -name "$ARCH" ! -name repodata -exec rm -rf {} +
+}
+
+DNFSETOPTS=(--setopt=retries=8 --setopt=timeout=60 --setopt=max_parallel_downloads=8)
+
+# Retry a flaky upstream download up to N times; with `set -e` a final failure
+# aborts the whole sync so pyinfra reports it.
+retry_n() { # n cmd...
+    local n="$1" i=0; shift
+    until "$@"; do
+        i=$((i + 1))
+        [ "$i" -lt "$n" ] || { echo "[error] giving up after $n attempts: $*" >&2; return 1; }
+        echo "[warn] retry $i/$n: $*" >&2
+        sleep 5
+    done
+}
+
+echo "==[k8s]== syncing kubelet/kubeadm/kubectl repo ($K8S_DEST)"
+mkdir -p "$K8S_DEST"
+migrate "$K8S_DEST" k8s-src
+trim_other_archs "$K8S_DEST"
+# NB: no --download-metadata: pkgs.k8s.io's repomd references an `other.xml.gz`
+# the CDN does not serve, which makes reposync fail. createrepo_c builds the
+# repodata for us instead.
+retry_n 5 dnf reposync "${DNFSETOPTS[@]}" --repoid=k8s-src --norepopath \
+    --arch "$ARCH" --newest-only --downloaddir="$K8S_DEST"
+trim_other_archs "$K8S_DEST"
+createrepo_c --update "$K8S_DEST"
+
+echo "==[docker]== syncing containerd.io repo ($DOCKER_DEST)"
+mkdir -p "$DOCKER_DEST"
+migrate "$DOCKER_DEST" docker-src
+# NB: docker repo is already x86_64-only and uses a flat Packages/ dir, so no
+# arch trimming here.
+retry_n 5 dnf reposync "${DNFSETOPTS[@]}" --repoid=docker-src --norepopath \
+    --arch "$ARCH" --newest-only --downloaddir="$DOCKER_DEST"
+createrepo_c --update "$DOCKER_DEST"
+
+echo "==[keys]== serving GPG keys from the mirror"
+mkdir -p "$K8S_DEST/repodata"
+curl -fsSL -o "$K8S_DEST/repodata/repomd.xml.key" "$K8S_KEY_URL" || echo "[warn] k8s gpg key fetch failed"
+curl -fsSL -o "$DOCKER_DEST/gpg" "$DOCKER_KEY_URL" || echo "[warn] docker gpg key fetch failed"
+
+echo "==[selinux]== relabel served tree for nginx"
+chcon -R -t httpd_sys_content_t "$REPO_ROOT" 2>/dev/null || true
+
+echo "== done =="

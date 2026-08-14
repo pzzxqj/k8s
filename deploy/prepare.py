@@ -1,12 +1,17 @@
-"""Prepare AlmaLinux 10 nodes for kubeadm with containerd + Cilium (offline).
+"""Prepare AlmaLinux 10 nodes for kubeadm with containerd + Cilium.
 
 AlmaLinux 10's own repo packages (kernel-modules-extra, container-selinux, ...)
-are installed via ONLINE dnf. Everything k8s-related (containerd.io,
-kubelet/kubeadm/kubectl, container images, Cilium) comes from the LOCAL offline
-bundle produced by scripts/download_offline.py:
+are installed via ONLINE dnf. Everything k8s-related is split across two local
+sources:
+  * k8s/containerd RPMs  -> the internal repo mirror VM (deploy/repo.py), via
+    /etc/yum.repos.d/kubernetes.repo + docker-ce.repo
+  * container images + Cilium -> the LOCAL offline bundle produced by
+    scripts/download_offline.py and pushed up as /opt/k8s-offline.
 
+Workflow:
+    uv run pyinfra -y inventory.py deploy/repo.py --limit k8s_repo --user admin
     uv run python scripts/download_offline.py            # build ./offline on the host
-    uv run pyinfra -y inventory.py deploy/prepare.py --user tux --key ~/.ssh/id_ed25519
+    uv run pyinfra -y inventory.py deploy/prepare.py --user admin --key ~/.ssh/id_ed25519
 
 Runs against every node (master + workers). The kubeadm init/join step is
 handled separately by deploy/init.py (master) / deploy/join.py (workers).
@@ -30,11 +35,14 @@ is_master = _common.is_master()
 # NOTE: the SFTP subsystem is enabled in cloud-init (incus/incus_vms.py); it is
 # required by files.put / files.sync / dnf.repo.
 
-# 1. Online: AlmaLinux base packages (kernel-modules-extra, dnf tooling)
-kernel_modules_pkg = "kernel-modules-extra"
-server.packages(
-    name=f"Ensure {kernel_modules_pkg} is installed (Alma repo, online)",
-    packages=[kernel_modules_pkg],
+# 1. Online: AlmaLinux base packages (kernel-modules-extra, dnf tooling).
+# Pin kernel-modules-extra to the RUNNING kernel: `dnf install kernel-modules-extra`
+# would otherwise pull the newest patch whose module tree doesn't match the
+# booted kernel, leaving br_netfilter unloadable.
+running_kernel = (host.get_fact(Command, "uname -r") or "").strip()
+server.shell(
+    name=f"Ensure kernel-modules-extra matches running kernel ({running_kernel})",
+    commands=[f"dnf install -y kernel-modules-extra-{running_kernel}"],
     _sudo=True,
 )
 
@@ -117,7 +125,8 @@ server.shell(
     _sudo=True,
 )
 
-# 6. Upload the offline bundle (RPMs, image tarballs, Cilium CLI + chart)
+# 6. Upload the offline bundle — still used for container images and the
+# Cilium CLI/chart, but no longer for the k8s/containerd RPM install.
 files.sync(
     name="Upload offline bundle to nodes",
     src=config.OFFLINE_DIR,
@@ -126,10 +135,11 @@ files.sync(
     _sudo=True,
 )
 
-# 7. Install containerd.io + kubelet/kubeadm/kubectl from local RPMs.
-# dnf resolves any missing deps from the node's ONLINE Alma repos (allowed —
-# only the k8s-related components are forced offline). Skipped when kubelet is
-# already present so re-running prep never reinstalls/restarts the runtime.
+# 7. Point dnf at the internal repo mirror (deploy/repo.py serves it, see
+# templates/kubernetes.repo.j2) and install containerd.io + kubelet/kubeadm/
+# kubectl from there. Base deps (container-selinux, ...) still resolve from
+# the node's ONLINE Alma repos. Skipped when kubelet is already present so
+# re-running prep never reinstalls/restarts the runtime.
 def rpm_db_has(pkg: str) -> bool:
     return (
         (
@@ -140,9 +150,27 @@ def rpm_db_has(pkg: str) -> bool:
     )
 
 
+files.template(
+    name="Point dnf at the internal kubernetes mirror",
+    src=str(config.REPO_ROOT / "templates" / "kubernetes.repo.j2"),
+    dest="/etc/yum.repos.d/kubernetes.repo",
+    mirror_url=config.REPO_MIRROR_URL,
+    k8s_repo_path=config.K8S_REPO_SERVED_PATH,
+    _sudo=True,
+)
+files.template(
+    name="Point dnf at the internal containerd mirror",
+    src=str(config.REPO_ROOT / "templates" / "docker-ce.repo.j2"),
+    dest="/etc/yum.repos.d/docker-ce.repo",
+    mirror_url=config.REPO_MIRROR_URL,
+    docker_repo_path=config.DOCKER_REPO_SERVED_PATH,
+    _sudo=True,
+)
 server.shell(
-    name="Install containerd.io + k8s RPMs from local offline bundle",
-    commands=[f"dnf install -y {config.NODE_OFFLINE_DIR}/rpms/*.rpm"],
+    name="Install containerd.io + k8s RPMs from the internal mirror",
+    commands=[
+        "dnf install -y kubelet kubeadm kubectl cri-tools kubernetes-cni containerd.io"
+    ],
     _sudo=True,
     _if=lambda: not rpm_db_has("kubelet"),
 )

@@ -3,13 +3,14 @@
 Run ONLY against the master, after deploy/prepare.py:
 
     uv run pyinfra -y inventory.py deploy/init.py --limit k8s_master \
-        --user tux --key ~/.ssh/id_ed25519
+        --user admin --key ~/.ssh/id_ed25519
 
 Idempotent: skips kubeadm init once /etc/kubernetes/admin.conf exists. It also
 writes the worker join command to /etc/kubernetes/join-command.txt so the host
 can fetch it (see scripts/cluster.sh) and feed it to deploy/join.py.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -26,9 +27,27 @@ if not _common.is_master():
     print(f"[skip] not the control-plane node ({config.MASTER_HOSTNAME})")
     raise SystemExit(0)
 
-k8s_version = (
-    host.get_fact(Command, f"cat {config.NODE_OFFLINE_DIR}/k8s-version.txt") or "v0.0.0"
-).strip()
+# Resolve the running k8s version from the installed kubeadm (single source of
+# truth, since RPMs now come from the internal mirror). Fall back to the
+# offline bundle's k8s-version.txt if kubeadm isn't query-able yet.
+
+
+def installed_k8s_version() -> str:
+    raw = (
+        host.get_fact(Command, "kubeadm version -o json 2>/dev/null || true") or ""
+    ).strip()
+    try:
+        return str(json.loads(raw)["clientVersion"]["gitVersion"])
+    except (ValueError, KeyError, TypeError):
+        return (
+            host.get_fact(
+                Command, f"cat {config.NODE_OFFLINE_DIR}/k8s-version.txt"
+            )
+            or "v0.0.0"
+        ).strip()
+
+
+k8s_version = installed_k8s_version()
 cluster_ready = _common.safe_file_exists(_common.ADMIN_CONF)
 
 # 1. kubeadm configuration
@@ -50,9 +69,9 @@ server.shell(
     _if=lambda: not cluster_ready,
 )
 
-# 3. Give the tux user admin kubeconfig (idempotent)
+# 3. Give the SSH user admin kubeconfig (idempotent)
 server.shell(
-    name="Install admin kubeconfig for tux",
+    name=f"Install admin kubeconfig for {config.SSH_USER}",
     commands=[
         f"install -d -o {config.SSH_USER} -g {config.SSH_USER} /home/{config.SSH_USER}/.kube",
         (
@@ -72,7 +91,7 @@ server.shell(
 )
 
 # 5. Install Cilium CNI (offline: chart is local, images already preloaded).
-# Run as tux so the CLI picks up ~/.kube/config. The inline check makes this
+# Run as {config.SSH_USER} so the CLI picks up ~/.kube/config. The inline check makes this
 # idempotent without depending on pyinfra's fact cache.
 server.shell(
     name="Install Cilium CNI from local chart",
