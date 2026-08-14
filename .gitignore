@@ -11,5 +11,5 @@ wheels/
 pyinfra-debug.log
 
 # Offline bundle + join token (large / secret)
-/offline/
+offline/
 *.tar

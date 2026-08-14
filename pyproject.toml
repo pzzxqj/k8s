@@ -9,9 +9,18 @@ authors = [
 requires-python = ">=3.14"
 dependencies = [
     "pyinfra>=3.10.0",
+    "httpx>=0.27.0",
+    "packaging>=24.0",
+    "PyYAML>=6.0",
 ]
 
 # Script collection, not an installable package: uv manages the venv deps but
 # does not build/install the project itself.
 [tool.uv]
 package = false
+
+# E4/E7/E9/F match ruff's default; +I (imports), ISC (implicit string concat),
+# RUF. Note: ruff's E402 exempts `sys.path` modifications, so the deploy/*
+# bootstrap (imports after sys.path.insert) needs no `# noqa`.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "ISC", "RUF"]

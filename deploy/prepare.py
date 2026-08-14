@@ -3,28 +3,27 @@
 AlmaLinux 10's own repo packages (kernel-modules-extra, container-selinux, ...)
 are installed via ONLINE dnf. Everything k8s-related (containerd.io,
 kubelet/kubeadm/kubectl, container images, Cilium) comes from the LOCAL offline
-bundle produced by scripts/download_offline.sh:
+bundle produced by scripts/download_offline.py:
 
-    ./scripts/download_offline.sh                    # build ./offline on the host
+    uv run python scripts/download_offline.py            # build ./offline on the host
     uv run pyinfra -y inventory.py deploy/prepare.py --user tux --key ~/.ssh/id_ed25519
 
 Runs against every node (master + workers). The kubeadm init/join step is
 handled separately by deploy/init.py (master) / deploy/join.py (workers).
 """
 
-import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import _common  # noqa: E402
-import config  # noqa: E402
+import _common
+from pyinfra.context import host
+from pyinfra.facts.files import FindInFile
+from pyinfra.facts.server import Command, Selinux
+from pyinfra.operations import files, server
 
-from pyinfra.context import host  # noqa: E402
-from pyinfra.facts.files import FindInFile  # noqa: E402
-from pyinfra.facts.server import Command, KernelVersion, Selinux  # noqa: E402
-from pyinfra.operations import files, server  # noqa: E402
+import config
 
 is_master = _common.is_master()
 
@@ -32,8 +31,7 @@ is_master = _common.is_master()
 # required by files.put / files.sync / dnf.repo.
 
 # 1. Online: AlmaLinux base packages (kernel-modules-extra, dnf tooling)
-kernel_version = host.get_fact(KernelVersion)
-kernel_modules_pkg = f"kernel-modules-extra-{re.sub(r'\.[^.]*$', '', kernel_version)}"
+kernel_modules_pkg = "kernel-modules-extra"
 server.packages(
     name=f"Ensure {kernel_modules_pkg} is installed (Alma repo, online)",
     packages=[kernel_modules_pkg],
@@ -106,7 +104,9 @@ files.line(
     replace="SELINUX=permissive",
     present=True,
     _if=lambda: bool(
-        host.get_fact(FindInFile, path=_common.SELINUX_CONFIG, pattern="^SELINUX=enforcing$")
+        host.get_fact(
+            FindInFile, path=_common.SELINUX_CONFIG, pattern="^SELINUX=enforcing$"
+        )
     ),
     _sudo=True,
 )
@@ -130,10 +130,16 @@ files.sync(
 # dnf resolves any missing deps from the node's ONLINE Alma repos (allowed —
 # only the k8s-related components are forced offline). Skipped when kubelet is
 # already present so re-running prep never reinstalls/restarts the runtime.
-rpm_db_has = lambda pkg: (  # noqa: E731
-    (host.get_fact(Command, f"rpm -q {pkg} >/dev/null 2>&1 && echo yes || echo no") or "").strip()
-    == "yes"
-)
+def rpm_db_has(pkg: str) -> bool:
+    return (
+        (
+            host.get_fact(Command, f"rpm -q {pkg} >/dev/null 2>&1 && echo yes || echo no")
+            or ""
+        ).strip()
+        == "yes"
+    )
+
+
 server.shell(
     name="Install containerd.io + k8s RPMs from local offline bundle",
     commands=[f"dnf install -y {config.NODE_OFFLINE_DIR}/rpms/*.rpm"],

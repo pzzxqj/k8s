@@ -15,12 +15,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import _common  # noqa: E402
-import config  # noqa: E402
+import _common
+from pyinfra.context import host
+from pyinfra.facts.server import Command
+from pyinfra.operations import files, server
 
-from pyinfra.context import host  # noqa: E402
-from pyinfra.facts.server import Command  # noqa: E402
-from pyinfra.operations import files, server  # noqa: E402
+import config
 
 if not _common.is_master():
     print(f"[skip] not the control-plane node ({config.MASTER_HOSTNAME})")
@@ -55,9 +55,11 @@ server.shell(
     name="Install admin kubeconfig for tux",
     commands=[
         f"install -d -o {config.SSH_USER} -g {config.SSH_USER} /home/{config.SSH_USER}/.kube",
-        f"install -o {config.SSH_USER} -g {config.SSH_USER} -m 600 "
-        "/etc/kubernetes/admin.conf "
-        f"/home/{config.SSH_USER}/.kube/config",
+        (
+            f"install -o {config.SSH_USER} -g {config.SSH_USER} -m 600 "
+            "/etc/kubernetes/admin.conf "
+            f"/home/{config.SSH_USER}/.kube/config"
+        ),
     ],
     _sudo=True,
 )
@@ -75,13 +77,15 @@ server.shell(
 server.shell(
     name="Install Cilium CNI from local chart",
     commands=[
-        "kubectl -n kube-system get daemonset cilium >/dev/null 2>&1 "
-        "&& echo '[skip] Cilium already installed' "
-        "|| cilium install "
-        "--chart-directory /opt/k8s-offline/cilium/chart "
-        "--set kubeProxyReplacement=false "
-        "--set operator.replicas=1 "
-        "--set hubble.enabled=false",
+        (
+            "kubectl -n kube-system get daemonset cilium >/dev/null 2>&1 "
+            "&& echo '[skip] Cilium already installed' "
+            "|| cilium install "
+            "--chart-directory /opt/k8s-offline/cilium/chart "
+            "--set kubeProxyReplacement=false "
+            "--set operator.replicas=1 "
+            "--set hubble.enabled=false"
+        ),
     ],
 )
 

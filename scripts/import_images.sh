@@ -5,7 +5,7 @@
 #   master - import every image, including control-plane-only tars (master)
 #
 # The image->scope mapping comes from /opt/k8s-offline/images/import-plan.txt
-# produced by download_offline.sh. Re-running is safe: already-present images
+# produced by download_offline.py. Re-running is safe: already-present images
 # are skipped.
 set -euo pipefail
 

@@ -5,7 +5,7 @@
 # Topology (master/worker IPs) is read from config.py; inventory.py derives the
 # pyinfra groups used with --limit.
 #
-# Prereqs: ./scripts/download_offline.sh run once; VMs sized (see config.VMS).
+# Prereqs: ./scripts/download_offline.py run once; VMs sized (see config.VMS).
 #
 #     ./scripts/cluster.sh
 #

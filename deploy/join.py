@@ -15,17 +15,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import _common  # noqa: E402
-import config  # noqa: E402
+import _common
+from pyinfra.operations import files, server
 
-from pyinfra.operations import files, server  # noqa: E402
+import config
 
 JOIN_CMD_SRC = f"{config.OFFLINE_DIR}/join-command.txt"
 
 if not Path(JOIN_CMD_SRC).is_file():
     raise SystemExit(
-        f"[error] {JOIN_CMD_SRC} not found — run cluster.sh or fetch the join "
-        "command from the master first"
+        (
+            f"[error] {JOIN_CMD_SRC} not found — run cluster.sh or fetch the join "
+            "command from the master first"
+        )
     )
 
 # kubelet.conf is 0600 root, so check existence via sudo rather than reading it

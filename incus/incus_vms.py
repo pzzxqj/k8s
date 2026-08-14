@@ -13,11 +13,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import config  # noqa: E402
+from pyinfra.context import host
+from pyinfra.facts.server import Command
+from pyinfra.operations import server
 
-from pyinfra.context import host  # noqa: E402
-from pyinfra.facts.server import Command  # noqa: E402
-from pyinfra.operations import server  # noqa: E402
+import config
 
 IMAGE = os.environ.get("INCUS_IMAGE", "images:almalinux/10/cloud")
 NETWORK = os.environ.get("INCUS_NETWORK", "incusbr0")
@@ -28,7 +28,7 @@ SSH_PUB_KEY = os.environ.get(
 VM_SELECT = [x.strip() for x in os.environ.get("INCUS_VMS", "").split(",") if x.strip()]
 LAB_PASSWORD_HASH = os.environ.get(
     "INCUS_PASSWORD_HASH",
-    "$6$cmjfM7yK3xEZRLk0$GGVqHsGbqo5KM1GcK7LsHea67v772D/FxDYA9vQQdOJpiM0zJK51VBhzDQaRV6mdLczz8Ls1ic1/zh74PtnUr/",
+    "admin@123",
 )
 
 VMS = config.VMS

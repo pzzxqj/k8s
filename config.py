@@ -4,7 +4,7 @@ Both the pyinfra deploy scripts (deploy/*) and the shell tooling derive their
 values from here. Change a node/IP/memory in ONE place.
 
 Artifact versions (k8s minor, Cilium chart, containerd.io RPM, ...) are pinned
-in scripts/download_offline.sh, which resolves the exact k8s patch and writes
+in scripts/download_offline.py, which resolves the exact k8s patch and writes
 the result into the offline bundle.
 """
 
@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parent
 OFFLINE_DIR = os.environ.get("OFFLINE_DIR", str(REPO_ROOT / "offline")).rstrip("/")
 NODE_OFFLINE_DIR = "/opt/k8s-offline"
 
-SSH_USER = "tux"
+SSH_USER = "admin"
 
 # ---------- topology ----------
 MASTER_HOSTNAME = "k8s-master"

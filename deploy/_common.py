@@ -13,10 +13,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import config  # noqa: E402
+from pyinfra.context import host
+from pyinfra.facts.server import Command
 
-from pyinfra.context import host  # noqa: E402
-from pyinfra.facts.server import Command  # noqa: E402
+import config
 
 FSTAB = "/etc/fstab"
 SELINUX_CONFIG = "/etc/selinux/config"

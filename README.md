@@ -10,7 +10,7 @@
 | k8s-worker-1 | 10.98.68.11 | 3GiB | worker |
 | k8s-worker-2 | 10.98.68.12 | 3GiB | worker |
 
-单点修改处：`config.py`（拓扑、目录、VM 规格）；artifact 版本固定在 `scripts/download_offline.sh`。
+单点修改处：`config.py`（拓扑、目录、VM 规格）；artifact 版本固定在 `scripts/download_offline.py`。
 
 ## 组件版本
 
@@ -31,7 +31,7 @@ deploy/                  # pyinfra 部署脚本
 incus/incus_vms.py       # 创建/销毁 VM
 templates/               # 远程配置文件 jinja2 模板（containerd.toml、kubeadm.yaml）
 scripts/
-  download_offline.sh    # 宿主机下载离线包到 ./offline
+  download_offline.py    # 宿主机下载离线包到 ./offline
   import_images.sh       # 节点端镜像导入助手（随包上传到 /opt/k8s-offline/）
   cluster.sh             # 一键编排全流程
 offline/                 # 生成的离线包（已 gitignore）
@@ -44,7 +44,7 @@ offline/                 # 生成的离线包（已 gitignore）
 uv run pyinfra @local incus/incus_vms.py
 
 # 2. 宿主机下载离线包（可断点续传/幂等）
-./scripts/download_offline.sh
+uv run python scripts/download_offline.py
 
 # 3. 一键部署：prepare → init(master) → join(workers) → verify
 ./scripts/cluster.sh
@@ -70,5 +70,5 @@ curl -sk https://10.96.0.1:443/version   # ClusterIP Service 路径
 ## 常见问题
 
 - **coredns 探针超时 / NotReady**：kubelet 被重启（如 RPM 重装）后偶发 veth/endpoint 状态残留。删掉 coredns Pod 让其重建即可：`kubectl -n kube-system delete pods -l k8s-app=kube-dns`。deploy/prepare.py 已用 `rpm -q` 守卫避免重跑时重装 kubelet。
-- **离线拉取镜像失败**：镜像 tag 与 kubeadm/Cilium chart 不一致。镜像清单来自 `kubeadm` 常量（deploy 版本见 `scripts/download_offline.sh`）与 `helm template` 渲染结果，重新跑 `./scripts/download_offline.sh` 会重新生成 `offline/images/import-plan.txt`。
+- **离线拉取镜像失败**：镜像 tag 与 kubeadm/Cilium chart 不一致。镜像清单来自 `kubeadm` 常量（deploy 版本见 `scripts/download_offline.py`）与 `helm template` 渲染结果，重新跑 `uv run python scripts/download_offline.py` 会重新生成 `offline/images/import-plan.txt`。
 - **幂等**：所有脚本可重复执行；`cluster.sh` 重跑全为 No-change/跳过，且不重启运行中的 kubelet。
