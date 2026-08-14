@@ -19,13 +19,14 @@ k8s/containerd 组件通过 **内网 dnf 镜像源**（k8s-repo）安装；容�
 - **k8s RPM**（kubelet/kubeadm/kubectl/cri-tools/kubernetes-cni）→ 内网镜像 `http://10.98.68.13/k8s/core:/stable:/v1.36/rpm/`（`k8s-repo` 从 pkgs.k8s.io `dnf reposync` 同步，`repo-sync.timer` 每日更新）
 - **containerd.io 2.3.3** → 内网镜像 `http://10.98.68.13/docker/linux/centos/10/x86_64/stable/`
 - **容器镜像 + Cilium CLI/chart** → 离线包 `./offline`（images/ 预载到 containerd）
-- **系统基础包**（container-selinux 等）→ 节点在线 Alma 仓库
+- **系统基础包**（container-selinux 等）→ 节点在线 Alma 仓库（VM 创建时 cloud-init 已把仓库指向 NJU 镜像 mirrors.nju.edu.cn，与 deploy/repo.py 一致）
 
 ## 目录结构
 
 ```
 config.py                # 单一事实来源：拓扑/目录/VM 规格/镜像源常量
 inventory.py             # pyinfra 分组（k8s_nodes / k8s_master / k8s_workers / k8s_repo）
+Justfile                 # just 命令入口：vm-create 并行建 VM / vm-destroy / offline / all
 deploy/                  # pyinfra 部署脚本
   repo.py                #   k8s-repo：nginx + reposync 镜像源（首次同步 + 每日 timer）
   prepare.py             #   所有节点：内核/镜像源指向/containerd/k8s RPM/镜像预载
@@ -47,7 +48,7 @@ offline/                 # 生成的离线包（已 gitignore）
 
 ```bash
 # 1. 建 VM（可选，已有则跳过）
-uv run pyinfra @local incus/incus_vms.py
+just vm-create   # 并行创建全部 VM（每个 VM 一个 pyinfra 进程）；子集：just vm-create k8s-master,k8s-worker-1
 
 # 2. 宿主机下载离线包-仅镜像/工具与容器镜像（可断点续传/幂等；k8s/containerd RPM 由镜像源提供，不在 bundle 中）
 uv run python scripts/download_offline.py
