@@ -7,6 +7,7 @@ set -euo pipefail
 REPO_ROOT={{ mirror_root }}
 K8S_DEST={{ k8s_dest }}
 DOCKER_DEST={{ docker_dest }}
+ALMA_DEST={{ alma_dest }}
 K8S_KEY_URL="https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/rpm/repodata/repomd.xml.key"
 DOCKER_KEY_URL="https://download.docker.com/linux/centos/gpg"
 ARCH=x86_64
@@ -61,6 +62,19 @@ migrate "$DOCKER_DEST" docker-src
 retry_n 5 dnf reposync "${DNFSETOPTS[@]}" --repoid=docker-src --norepopath \
     --arch "$ARCH" --newest-only --downloaddir="$DOCKER_DEST"
 createrepo_c --update "$DOCKER_DEST"
+
+echo "==[alma]== downloading necessary packages + deps ($ALMA_DEST)"
+mkdir -p "$ALMA_DEST"
+# Only the packages the nodes install from Alma sources (see prepare.py), with
+# their full dependency closure. `uname -r` is the kernel ALL lab VMs share
+# (same cloud image); if a node's kernel ever differs, bump this list.
+# Resolve strictly against the VM's own baseos/appstream repos, which repo.py
+# has pointed at the NJU upstream mirror.
+retry_n 5 dnf download --resolve \
+    --disablerepo='*' --enablerepo=baseos --enablerepo=appstream \
+    --destdir="$ALMA_DEST" \
+    "kernel-modules-extra-$(uname -r)" container-selinux
+createrepo_c --update "$ALMA_DEST"
 
 echo "==[keys]== serving GPG keys from the mirror"
 mkdir -p "$K8S_DEST/repodata"

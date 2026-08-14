@@ -49,8 +49,8 @@ offline/                 # 生成的离线包（已 gitignore）
 # 1. 建 VM（可选，已有则跳过）
 uv run pyinfra @local incus/incus_vms.py
 
-# 2. 宿主机下载离线包-仅镜像/工具与容器镜像（可断点续传/幂等；k8s/containerd RPM 由镜像源提供，故 --no-rpms）
-uv run python scripts/download_offline.py --no-rpms
+# 2. 宿主机下载离线包-仅镜像/工具与容器镜像（可断点续传/幂等；k8s/containerd RPM 由镜像源提供，不在 bundle 中）
+uv run python scripts/download_offline.py
 
 # 3. 一键部署：镜像源 → prepare → init(master) → join(workers) → verify
 ./scripts/cluster.sh
@@ -81,5 +81,5 @@ curl -sk https://10.96.0.1:443/version   # ClusterIP Service 路径
 ## 常见问题
 
 - **coredns 探针超时 / NotReady**：kubelet 被重启（如 RPM 重装）后偶发 veth/endpoint 状态残留。删掉 coredns Pod 让其重建即可：`kubectl -n kube-system delete pods -l k8s-app=kube-dns`。deploy/prepare.py 已用 `rpm -q` 守卫避免重跑时重装 kubelet。
-- **离线拉取镜像失败**：镜像 tag 与 kubeadm/Cilium chart 不一致。镜像清单来自 `kubeadm` 常量（deploy 版本见 `scripts/download_offline.py`）与 `helm template` 渲染结果，重新跑 `uv run python scripts/download_offline.py --no-rpms` 会重新生成 `offline/images/import-plan.txt`。
+- **离线拉取镜像失败**：镜像 tag 与 kubeadm/Cilium chart 不一致。镜像清单来自 `kubeadm` 常量（deploy 版本见 `scripts/download_offline.py`）与 `helm template` 渲染结果，重新跑 `uv run python scripts/download_offline.py` 会重新生成 `offline/images/import-plan.txt`。
 - **幂等**：所有脚本可重复执行；`cluster.sh` 重跑全为 No-change/跳过，且不重启运行中的 kubelet。

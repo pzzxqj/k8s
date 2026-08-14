@@ -1,0 +1,7 @@
+[alma-mirror]
+name=AlmaLinux $releasever (internal mirror, necessary packages only)
+baseurl={{ mirror_url }}/{{ alma_path }}/
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400

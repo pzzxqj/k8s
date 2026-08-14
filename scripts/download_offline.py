@@ -3,21 +3,21 @@
 offline bundle under ./offline that deploy/prepare.py uploads to the nodes.
 
 k8s/containerd RPMs are installed from the internal repo mirror (deploy/repo.py),
-so they are NOT part of the bundle unless you pass --no-rpms to skip them;
-container images + Cilium artifacts always come from this bundle. Base packages
-(container-selinux) come from the node's ONLINE dnf repos.
+so they are NOT part of the bundle; container images + Cilium artifacts always
+come from this bundle. Base packages (container-selinux) come from the node's
+ONLINE dnf repos. The exact k8s patch version is resolved by querying the
+mirror's own k8s-src repo with dnf repoquery over ssh.
 
-Requires on the host: docker (for image export). HTTP downloads go through httpx.
+Requires on the host: docker (for image export), ssh access to the mirror VM
+(admin@k8s-repo). HTTP downloads go through httpx.
 
     uv run python scripts/download_offline.py            # build ./offline
-    uv run python scripts/download_offline.py --no-rpms   # RPMs come from the mirror
     OFFLINE_DIR=/path uv run python scripts/download_offline.py
 """
 
 from __future__ import annotations
 
 import argparse
-import gzip
 import hashlib
 import os
 import re
@@ -26,13 +26,15 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 import yaml
-from packaging.version import Version
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELM_DIR = Path(tempfile.gettempdir()) / "k8s-offline-helm"
@@ -56,11 +58,6 @@ CILIUM_IMAGES = (
 )
 
 
-def _local_name(tag: str) -> str:
-    """ElementTree tag -> local name (strips the XML namespace)."""
-    return tag.rsplit("}", 1)[-1]
-
-
 @dataclass(frozen=True)
 class Settings:
     offline_dir: Path
@@ -68,17 +65,10 @@ class Settings:
     k8s_version: str | None
     cilium_chart_ver: str
     cilium_cli_ver: str
-    containerd_rpm: str
     helm_ver: str
     arch: str
-    docker_arch: str
     helm_arch: str
     cilium_arch: str
-    no_rpms: bool = False
-
-    @property
-    def pkgs_base(self) -> str:
-        return f"https://pkgs.k8s.io/core:/stable:/v{self.k8s_minor}/rpm"
 
     def control_plane_images(self, k8s_ver: str) -> list[str]:
         return [f"{img}:v{k8s_ver}" for img in K8S_CONTROL_PLANE_IMAGES] + [ETCD_IMAGE]
@@ -103,14 +93,6 @@ def parse_args() -> Settings:
         type=Path,
         help="output directory (default: $OFFLINE_DIR or <repo>/offline)",
     )
-    parser.add_argument(
-        "--no-rpms",
-        action="store_true",
-        help=(
-            "skip k8s/containerd RPM download — they are now installed from the "
-            "internal repo mirror (deploy/repo.py), not from the offline bundle"
-        ),
-    )
     ns = parser.parse_args()
 
     arch = os.environ.get("ARCH", "x86_64")
@@ -127,15 +109,10 @@ def parse_args() -> Settings:
         k8s_version=os.environ.get("K8S_VERSION"),
         cilium_chart_ver=os.environ.get("CILIUM_CHART_VER", "1.20.0"),
         cilium_cli_ver=os.environ.get("CILIUM_CLI_VER", "0.19.7"),
-        containerd_rpm=os.environ.get(
-            "CONTAINERD_RPM", "containerd.io-2.3.3-1.el10.x86_64.rpm"
-        ),
         helm_ver=os.environ.get("HELM_VER", "3.18.4"),
         arch=arch,
-        docker_arch="x86_64",
         helm_arch="amd64",
         cilium_arch="amd64",
-        no_rpms=ns.no_rpms,
     )
 
 
@@ -145,12 +122,6 @@ def new_client() -> httpx.Client:
         timeout=httpx.Timeout(connect=30.0, read=300.0, write=60.0, pool=30.0),
         transport=httpx.HTTPTransport(retries=3),
     )
-
-
-def http_get(client: httpx.Client, url: str) -> bytes:
-    resp = client.get(url)
-    resp.raise_for_status()
-    return resp.content
 
 
 def download(client: httpx.Client, url: str, dest: Path) -> None:
@@ -169,136 +140,45 @@ def download(client: httpx.Client, url: str, dest: Path) -> None:
     part.replace(dest)
 
 
-class RpmRepo:
-    """Metadata of a dnf RPM repo, fetched once and reused for all lookups.
-
-    Packages map to their (version, location-href) pairs as parsed from
-    primary.xml.gz — no repeated downloads, no regex-on-XML.
-    """
-
-    def __init__(self, client: httpx.Client, base_url: str, arch: str):
-        self.client: httpx.Client = client
-        self.base_url: str = base_url
-        self.arch: str = arch
-        self._packages: dict[str, list[tuple[str, str]]] | None = None
-        self._patch_versions: list[str] = []
-
-    def _load(self) -> None:
-        repomd = ET.fromstring(
-            http_get(self.client, f"{self.base_url}/repodata/repomd.xml")
-        )
-        primary_href = next(
-            (
-                loc.get("href")
-                for data in repomd
-                if _local_name(data.tag) == "data" and data.get("type") == "primary"
-                for loc in data
-                if _local_name(loc.tag) == "location" and loc.get("href")
-            ),
-            None,
-        )
-        if not primary_href:
-            raise RuntimeError(
-                f"no primary metadata href in {self.base_url}/repodata/repomd.xml"
-            )
-        # href is already "repodata/<hash>-primary.xml.gz"; keep just the filename
-        primary_href = primary_href.rsplit("/", 1)[-1]
-
-        primary = gzip.decompress(
-            http_get(self.client, f"{self.base_url}/repodata/{primary_href}")
-        )
-        packages: dict[str, list[tuple[str, str]]] = {}
-        patches: list[str] = []
-        for pkg in ET.fromstring(primary):
-            if _local_name(pkg.tag) != "package":
-                continue
-            name = ver = href = None
-            for child in pkg:
-                tag = _local_name(child.tag)
-                if tag == "name":
-                    name = child.text
-                elif tag == "version":
-                    ver = child.get("ver")
-                elif tag == "location":
-                    href = child.get("href")
-            if name and ver and href:
-                if href.startswith(f"{self.arch}/"):
-                    packages.setdefault(name, []).append((ver, href))
-                patches.append(ver)
-        self._packages = packages
-        self._patch_versions = patches
-
-    def packages(self) -> dict[str, list[tuple[str, str]]]:
-        if self._packages is None:
-            self._load()
-        assert self._packages is not None
-        return self._packages
-
-    def latest_k8s_patch(self, minor: str) -> str:
-        self.packages()  # ensure metadata is loaded
-        version = max(
-            Version(v) for v in self._patch_versions if v.startswith(f"{minor}.")
-        )
-        return str(version)
-
-    def newest(self, name: str) -> str | None:
-        """Location href of the newest build of a package (e.g. cri-tools)."""
-        versions = self.packages().get(name)
-        if not versions:
-            return None
-        return max(versions, key=lambda pkg: Version(pkg[0]))[1]
-
-    def exact(self, name: str, ver: str) -> str | None:
-        """Location href of a package with the exact version ver."""
-        versions = self.packages().get(name)
-        if not versions:
-            return None
-        return next((href for v, href in versions if v == ver), None)
-
-
 def setup_layout(settings: Settings) -> None:
-    for sub in ("rpms", "images", "cilium", "tools"):
+    for sub in ("images", "cilium", "tools"):
         (settings.offline_dir / sub).mkdir(parents=True, exist_ok=True)
 
 
-def resolve_k8s_version(settings: Settings, repo: RpmRepo) -> str:
+def resolve_k8s_version(settings: Settings) -> str:
+    """Exact k8s patch for K8S_MINOR: $K8S_VERSION or, failing that, resolved
+    from the mirror VM's own k8s-src repo via dnf repoquery over ssh."""
     if settings.k8s_version:
         return settings.k8s_version
     print(f"[*] Resolving latest kubelet patch for v{settings.k8s_minor} ...")
-    return repo.latest_k8s_patch(settings.k8s_minor)
-
-
-def download_k8s_rpms(
-    settings: Settings, repo: RpmRepo, client: httpx.Client, k8s_ver: str
-) -> None:
-    for spec in ("kubelet", "kubeadm", "kubectl"):
-        href = repo.exact(spec, k8s_ver)
-        if href is None:
-            sys.exit(f"[error] Could not locate {spec}-{k8s_ver} rpm in repo")
-        download(
-            client,
-            f"{settings.pkgs_base}/{href}",
-            settings.offline_dir / "rpms" / Path(href).name,
-        )
-
-    for pkg in ("cri-tools", "kubernetes-cni"):
-        href = repo.newest(pkg)
-        if href is None:
-            sys.exit(f"[error] Could not locate {pkg} rpm in repo")
-        download(
-            client,
-            f"{settings.pkgs_base}/{href}",
-            settings.offline_dir / "rpms" / Path(href).name,
-        )
-
-    print("[*] Downloading containerd.io RPM ...")
-    containerd_url = (
-        f"https://download.docker.com/linux/centos/10/{settings.docker_arch}"
-        f"/stable/Packages/{settings.containerd_rpm}"
+    ssh_user = os.environ.get("SSH_USER", config.SSH_USER)
+    mirror_ip = os.environ.get("REPO_MIRROR_IP", config.REPO_MIRROR_IP)
+    ssh_key = os.environ.get(
+        "SSH_KEY", str(Path.home() / ".ssh" / "id_ed25519")
     )
-    download(
-        client, containerd_url, settings.offline_dir / "rpms" / settings.containerd_rpm
+    query = (
+        "sudo dnf --disablerepo='*' --enablerepo=k8s-src -q "
+        "repoquery --latest-limit 1 --qf '%{VERSION}' kubelet"
     )
+    proc = subprocess.run(
+        [
+            "ssh", "-i", ssh_key,
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "ConnectTimeout=10",
+            f"{ssh_user}@{mirror_ip}",
+            query,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        sys.exit(
+            f"[error] dnf repoquery on {ssh_user}@{mirror_ip} failed: "
+            f"{proc.stderr.strip()} (is deploy/repo.py provisioned?)"
+        )
+    version = proc.stdout.strip().splitlines()[-1].strip()
+    return version
 
 
 def download_cilium_artifacts(settings: Settings, client: httpx.Client) -> None:
@@ -497,16 +377,10 @@ def main() -> int:
     settings = parse_args()
     setup_layout(settings)
 
+    k8s_ver = resolve_k8s_version(settings)
+    print(f"[*] Kubernetes version: v{k8s_ver}")
+
     with new_client() as client:
-        repo = RpmRepo(client, settings.pkgs_base, settings.docker_arch)
-
-        k8s_ver = resolve_k8s_version(settings, repo)
-        print(f"[*] Kubernetes version: v{k8s_ver}")
-
-        if not settings.no_rpms:
-            print("[*] Downloading k8s RPMs ...")
-            download_k8s_rpms(settings, repo, client, k8s_ver)
-
         download_cilium_artifacts(settings, client)
 
         print("[*] Downloading helm (host-side, for image-list resolution) ...")

@@ -1,10 +1,10 @@
 """Prepare AlmaLinux 10 nodes for kubeadm with containerd + Cilium.
 
-AlmaLinux 10's own repo packages (kernel-modules-extra, container-selinux, ...)
-are installed via ONLINE dnf. Everything k8s-related is split across two local
-sources:
-  * k8s/containerd RPMs  -> the internal repo mirror VM (deploy/repo.py), via
-    /etc/yum.repos.d/kubernetes.repo + docker-ce.repo
+Everything the nodes install comes from intranet sources only:
+  * AlmaLinux base packages (kernel-modules-extra, container-selinux, ...) ->
+    BaseOS/AppStream mirrored on the internal vm (deploy/repo.py), via
+    /etc/yum.repos.d/almalinux-mirror.repo
+  * k8s/containerd RPMs -> the same mirror, via kubernetes.repo + docker-ce.repo
   * container images + Cilium -> the LOCAL offline bundle produced by
     scripts/download_offline.py and pushed up as /opt/k8s-offline.
 
@@ -35,10 +35,32 @@ is_master = _common.is_master()
 # NOTE: the SFTP subsystem is enabled in cloud-init (incus/incus_vms.py); it is
 # required by files.put / files.sync / dnf.repo.
 
-# 1. Online: AlmaLinux base packages (kernel-modules-extra, dnf tooling).
-# Pin kernel-modules-extra to the RUNNING kernel: `dnf install kernel-modules-extra`
-# would otherwise pull the newest patch whose module tree doesn't match the
-# booted kernel, leaving br_netfilter unloadable.
+# 1. Fully intranet dnf: replace the node's online AlmaLinux repos with the
+# internal mirror (repo.py mirrors BaseOS + AppStream), then all of the dnf
+# installs below (kernel-modules-extra, container-selinux, ...) resolve from
+# the mirror only. The original files are moved aside (not deleted) so the
+# change is reversible; `mv` globbing nothing on re-runs is a no-op.
+server.shell(
+    name="Disable online AlmaLinux repo files",
+    commands=[
+        "mkdir -p /etc/yum.repos.d/online-backup",
+        "mv -f /etc/yum.repos.d/almalinux-*.repo /etc/yum.repos.d/online-backup/ || true",
+    ],
+    _sudo=True,
+)
+files.template(
+    name="Point AlmaLinux necessary packages at the internal mirror",
+    src=str(config.REPO_ROOT / "templates" / "almalinux-mirror.repo.j2"),
+    dest="/etc/yum.repos.d/almalinux-mirror.repo",
+    mirror_url=config.REPO_MIRROR_URL,
+    alma_path=config.ALMA_SERVED_PATH,
+    _sudo=True,
+)
+
+# 2. Mirror-provided AlmaLinux base packages (kernel-modules-extra, dnf
+# tooling). Pin kernel-modules-extra to the RUNNING kernel: `dnf install
+# kernel-modules-extra` would otherwise pull the newest patch whose module
+# tree doesn't match the booted kernel, leaving br_netfilter unloadable.
 running_kernel = (host.get_fact(Command, "uname -r") or "").strip()
 server.shell(
     name=f"Ensure kernel-modules-extra matches running kernel ({running_kernel})",
@@ -47,14 +69,14 @@ server.shell(
 )
 
 # container-selinux is a hard dependency of the containerd.io RPM and is only
-# available from the online Alma repos — install it before the offline RPMs.
+# available from the AlmaLinux repos — install it before the offline RPMs.
 server.packages(
-    name="Ensure container-selinux is installed (containerd.io dep, online)",
+    name="Ensure container-selinux is installed (containerd.io dep)",
     packages=["container-selinux"],
     _sudo=True,
 )
 
-# 2. Load required kernel modules
+# 3. Load required kernel modules
 for module in ["overlay", "br_netfilter"]:
     files.line(
         name=f"Persist kernel module {module} for boot",
@@ -70,7 +92,7 @@ for module in ["overlay", "br_netfilter"]:
         _sudo=True,
     )
 
-# 3. sysctl settings required by kubelet / CNI
+# 4. sysctl settings required by kubelet / CNI
 sysctl_params = {
     "net.bridge.bridge-nf-call-iptables": 1,
     "net.bridge.bridge-nf-call-ip6tables": 1,
@@ -86,7 +108,7 @@ for key, value in sysctl_params.items():
         _sudo=True,
     )
 
-# 4. Swap off
+# 5. Swap off
 swap_regex = r"^[^#].*swap.*$"
 files.line(
     name="Comment out active swap lines in /etc/fstab",
@@ -104,7 +126,7 @@ server.shell(
     _sudo=True,
 )
 
-# 5. SELinux permissive
+# 6. SELinux permissive
 files.line(
     name="Set SELINUX=permissive in /etc/selinux/config",
     path=_common.SELINUX_CONFIG,
@@ -125,7 +147,7 @@ server.shell(
     _sudo=True,
 )
 
-# 6. Upload the offline bundle — still used for container images and the
+# 7. Upload the offline bundle — still used for container images and the
 # Cilium CLI/chart, but no longer for the k8s/containerd RPM install.
 files.sync(
     name="Upload offline bundle to nodes",
@@ -135,11 +157,11 @@ files.sync(
     _sudo=True,
 )
 
-# 7. Point dnf at the internal repo mirror (deploy/repo.py serves it, see
+# 8. Point dnf at the internal repo mirror (deploy/repo.py serves it, see
 # templates/kubernetes.repo.j2) and install containerd.io + kubelet/kubeadm/
-# kubectl from there. Base deps (container-selinux, ...) still resolve from
-# the node's ONLINE Alma repos. Skipped when kubelet is already present so
-# re-running prep never reinstalls/restarts the runtime.
+# kubectl from there. All base deps already resolve from the mirror via
+# /etc/yum.repos.d/almalinux-mirror.repo. Skipped when kubelet is already
+# present so re-running prep never reinstalls/restarts the runtime.
 def rpm_db_has(pkg: str) -> bool:
     return (
         (
@@ -175,7 +197,7 @@ server.shell(
     _if=lambda: not rpm_db_has("kubelet"),
 )
 
-# 8. containerd config: systemd cgroup driver, matching pause image, CNI dirs
+# 9. containerd config: systemd cgroup driver, matching pause image, CNI dirs
 files.template(
     name="Write containerd config with systemd cgroup driver",
     src=str(config.REPO_ROOT / "templates" / "containerd-config.toml.j2"),
@@ -184,7 +206,7 @@ files.template(
     _sudo=True,
 )
 
-# 9. Start containerd
+# 10. Start containerd
 server.service(
     name="Enable and start containerd",
     service="containerd",
@@ -193,7 +215,7 @@ server.service(
     _sudo=True,
 )
 
-# 10. Preload container images into the k8s.io namespace. Master also gets the
+# 11. Preload container images into the k8s.io namespace. Master also gets the
 # control-plane-only images (kube-apiserver etc.), workers only the common ones.
 files.put(
     name="Upload image import helper",
@@ -210,7 +232,7 @@ server.shell(
     _sudo=True,
 )
 
-# 11. kubelet ships its own systemd unit; enable it (start happens at init/join).
+# 12. kubelet ships its own systemd unit; enable it (start happens at init/join).
 # systemctl enable (not a running-state op) so re-running prep never stops a
 # kubelet that is already serving a joined node.
 server.shell(
