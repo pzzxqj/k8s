@@ -33,7 +33,7 @@ deploy/                  # pyinfra 部署脚本
   prepare.py             #   所有节点：内核/镜像源指向/containerd/k8s RPM/镜像预载
   init.py                #   master：kubeadm init + Cilium 离线安装
   join.py                #   workers：kubeadm join
-incus/incus_vms.py       # 创建/销毁 VM
+incus/incus_vms.py       # 创建/销毁 VM（原生 Python + 线程池并行，不依赖 pyinfra）
 templates/               # 远程配置文件 jinja2 模板
   kubernetes.repo.j2     #   节点端 k8s dnf 源（指向 k8s-repo）
   docker-ce.repo.j2      #   节点端 containerd dnf 源（指向 k8s-repo）
@@ -50,7 +50,7 @@ Justfile recipe 即一键编排链：`all: verify -> join -> init -> prepare -> 
 
 ```bash
 # 1. 建 VM（可选，已有则跳过）
-just vm-create   # 并行创建全部 VM（每个 VM 一个 pyinfra 进程）；子集：just vm-create k8s-master,k8s-worker-1
+just vm-create   # 并行创建全部 VM（脚本内部线程池）；子集：just vm-create k8s-master,k8s-worker-1
 
 # 2. 生成离线包并推送到所有节点 /opt/k8s-offline（可断点续传/幂等；
 #    镜像清单来自本地 kubeadm 的 `kubeadm config images list` + 固定 Cilium 清单；

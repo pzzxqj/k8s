@@ -13,9 +13,6 @@ k8s_repo_path := `uv run python -c "import config; print(config.K8S_REPO_SERVED_
 key := `echo "${SSH_KEY:-$HOME/.ssh/id_ed25519}"`
 offline_dir := env_var_or_default("OFFLINE_DIR", "offline")
 
-# default concurrency for parallel VM creation
-parallel := "4"
-
 default:
     @just --list
 
@@ -27,14 +24,14 @@ status:
 vm-list:
     uv run python -c "import config; print('\n'.join(config.VMS))"
 
-# Create Incus VMs in parallel (one pyinfra process per VM).
+# Create Incus VMs in parallel (thread pool inside incus_vms.py).
 # Optional comma-separated subset: just vm-create k8s-master,k8s-worker-1
 vm-create vms="":
-    @names="{{ vms }}"; [ -z "$names" ] && names="{{ vm_names }}"; printf '%s\n' "$names" | tr ' ' '\n' | xargs -P {{ parallel }} -I{} env INCUS_VMS={} uv run pyinfra -y @local incus/incus_vms.py
+    @names="{{ vms }}"; [ -z "$names" ] && names="{{ vm_names }}"; names="${names//,/ }"; uv run incus/incus_vms.py $names
 
 # Destroy Incus VMs (default all, or comma-separated subset)
 vm-destroy vms="":
-    @names="{{ vms }}"; [ -z "$names" ] && names="{{ vm_names }}"; for vm in ${names//,/ }; do incus delete --force "$vm" 2>/dev/null || true; done
+    @names="{{ vms }}"; [ -z "$names" ] && names="{{ vm_names }}"; names="${names//,/ }"; uv run incus/incus_vms.py --destroy $names
 
 # Force-provision the repo mirror (nginx + reposync). Idempotent; runs a full
 # reposync each time, so prefer `just offline` which only does this when needed.
