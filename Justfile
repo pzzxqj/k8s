@@ -37,8 +37,9 @@ vm-destroy vms="":
 vm-destroy-data vms="":
     @names="{{ vms }}"; [ -z "$names" ] && names="{{ vm_names }}"; names="${names//,/ }"; uv run incus/incus_vms.py --destroy --purge-repos-data $names
 
-# Force-provision the repo mirror (nginx + reposync). Idempotent; runs a full
-# reposync each time, so prefer `just offline` which only does this when needed.
+# Force-(re)provision the repo mirror config (nginx + reposync script/services).
+# Idempotent; does NOT run the sync itself (first sync runs manually, then the
+# daily timer). ensure-repo only provisions when the mirrored repo isn't served.
 repo:
     uv run pyinfra -y inventory.py deploy/repo.py --limit k8s_repo --user {{ ssh_user }} --key {{ key }}
 

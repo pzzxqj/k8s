@@ -1,7 +1,7 @@
 # k8s 内网实验集群
 
 在 Incus 的 3 台 AlmaLinux 10 VM 上，用 **kubeadm + containerd + Cilium** 部署一个学习用的 Kubernetes v1.36 集群，另加 **1 台内网软件源镜像 VM**。
-k8s/containerd 组件通过 **内网 dnf 镜像源**（k8s-repo）安装；容器镜像与 Cilium 走**离线包**（宿主机下载 → 上传到节点）；系统基础包走节点的在线 Alma dnf。整体模拟真实内网受限环境。
+k8s/containerd 组件通过 **内网 dnf 镜像源**（k8s-repo）安装；容器镜像与 Cilium 走**离线包**（宿主机下载 → 上传到节点）；系统基础包同样由镜像源 k8s-repo 的 Alma 子 repo 提供（见下）。整体模拟真实内网受限环境。
 
 ## 拓扑
 
@@ -38,7 +38,7 @@ config.py                # 单一事实来源：拓扑/目录/VM 规格/镜像�
 inventory.py             # pyinfra 分组（k8s_nodes / k8s_master / k8s_workers / k8s_repo）
 Justfile                 # just 命令入口：vm-create / vm-destroy / offline / repo / all
 deploy/                  # pyinfra 部署脚本
-  repo.py                #   k8s-repo：nginx + reposync 镜像源（首次同步 + 每日 timer）
+  repo.py                #   k8s-repo：nginx + reposync 镜像源（配置/每日 timer；首次同步手动触发）
   prepare.py             #   所有节点：内核/镜像源指向/containerd/k8s RPM/镜像预载
   init.py                #   master：kubeadm init + Cilium 离线安装
   join.py                #   workers：kubeadm join
@@ -74,7 +74,7 @@ just all
 手动执行单个阶段：
 
 ```bash
-just repo        # 强制 provision/同步镜像源（ensure-repo 只在未 provision 时才做）
+just repo        # 强制（重新）provision 镜像源配置（幂等；同步本身不在此步骤，见"镜像数据持久化"）
 just offline     # 构建并上传离线包（依赖 ensure-repo，保证镜像源先就绪）
 just prepare     # 所有节点准备（依赖 offline）
 just init        # master 初始化（依赖 prepare）
