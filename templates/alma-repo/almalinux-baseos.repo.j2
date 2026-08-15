@@ -1,0 +1,34 @@
+# Managed AlmaLinux repo file. Captured from a fresh AlmaLinux 10 cloud VM;
+# regenerate with scripts/snapshot_alma_repos.py. alma_base/enabled are the
+# only free variables: enabled=1 reproduces the stock enablement (k8s-repo),
+# deploy/_alma_repos.py also supports node mode (BaseOS/AppStream only).
+[baseos]
+name=AlmaLinux $releasever - BaseOS
+# mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/baseos
+baseurl={{ alma_base }}/$releasever/BaseOS/$basearch/os/
+enabled={{ enabled }}
+gpgcheck=1
+countme=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=1
+
+[baseos-debuginfo]
+name=AlmaLinux $releasever - BaseOS - Debug
+# mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/baseos-debug
+# baseurl=https://vault.almalinux.org/$releasever/BaseOS/debug/$basearch/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0
+
+[baseos-source]
+name=AlmaLinux $releasever - BaseOS - Source
+# mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/baseos-source
+# baseurl=https://vault.almalinux.org/$releasever/BaseOS/Source/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-AlmaLinux-10
+metadata_expire=86400
+enabled_metadata=0

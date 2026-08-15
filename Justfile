@@ -33,6 +33,10 @@ vm-create vms="":
 vm-destroy vms="":
     @names="{{ vms }}"; [ -z "$names" ] && names="{{ vm_names }}"; names="${names//,/ }"; uv run incus/incus_vms.py --destroy $names
 
+# Destroy VMs AND wipe k8s-repo's persistent mirror-data volume (--purge-repos-data)
+vm-destroy-data vms="":
+    @names="{{ vms }}"; [ -z "$names" ] && names="{{ vm_names }}"; names="${names//,/ }"; uv run incus/incus_vms.py --destroy --purge-repos-data $names
+
 # Force-provision the repo mirror (nginx + reposync). Idempotent; runs a full
 # reposync each time, so prefer `just offline` which only does this when needed.
 repo:

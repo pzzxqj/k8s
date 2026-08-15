@@ -19,8 +19,17 @@ k8s/containerd 组件通过 **内网 dnf 镜像源**（k8s-repo）安装；容�
 - **k8s RPM**（kubelet/kubeadm/kubectl/cri-tools/kubernetes-cni）→ 内网镜像 `http://10.98.68.13/k8s/core:/stable:/v1.36/rpm/`（`k8s-repo` 从 pkgs.k8s.io `dnf reposync` 同步，`repo-sync.timer` 每日更新）
 - **containerd.io 2.3.3** → 内网镜像 `http://10.98.68.13/docker/linux/centos/10/x86_64/stable/`
 - **容器镜像 + Cilium CLI/chart** → 离线包 `./offline`（images/ 预载到 containerd；`download_offline.py` 用 rsync 直接推到各节点 `/opt/k8s-offline`，不经 pyinfra）
-- **系统基础包**（kernel-modules-extra、container-selinux 等）→ 镜像 `k8s-repo` 的 `almalinux/10/BaseOS|AppStream/` 规范布局子 repo（仅镜像所需包及其依赖闭包；节点保留原始 `almalinux-*.repo`，仅把 baseurl 指到内网镜像）
+- **系统基础包**（kernel-modules-extra、container-selinux 等）→ 镜像 `k8s-repo` 的 `almalinux/10/BaseOS|AppStream/` 规范布局子 repo（学习环境，仅镜像部署 k8s 所需包及其依赖闭包；镜像机/节点的 `almalinux-*.repo` 均为受管模板 `templates/alma-repo/`，见 `deploy/_alma_repos.py`：k8s-repo 还原原始全部启用（NJU 上游），节点仅启用被镜像的 BaseOS/AppStream；`scripts/snapshot_alma_repos.py` 可从新版 Alma VM 重新抓取）
 - **kube-proxy** → kubeadm 默认 iptables 代理模式。注：曾尝试原生 nftables 代理模式（`kubeProxy.config.mode: nftables`，kubeadm v1beta4 中作独立文档），实测会破坏节点出站网络（kube-proxy 生成的 nft 表导致节点无法出站，flush 即恢复），故保留 iptables 模式；节点 `iptables-nft` 满足 kubelet 的 iptables 依赖，另装 `nftables` 包提供 `nft` CLI 以便排查规则
+
+## 镜像数据持久化
+
+镜像机 `k8s-repo` 的同步数据（`/var/www/repos`）放在 Incus 持久卷 `k8s-repo-repos`，由 `incus/incus_vms.py` 自动创建并挂载。`--destroy k8s-repo` 只删 VM、保留数据，重建后不去重复下载：
+
+- k8s/containerd：`dnf reposync --newest-only` 天然增量；
+- Alma Linux：repo-sync.sh 先用 `dnf download --url --resolve` 求依赖闭包的 URL 清单，只下载缺失、只删孤儿（陈旧内核等），每日定时与重建都不再全量重下闭包。
+
+显式清空镜像数据用 `incus/incus_vms.py --destroy k8s-repo --purge-repos-data`。
 
 ## 目录结构
 

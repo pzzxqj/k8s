@@ -67,9 +67,7 @@ echo "==[alma]== syncing necessary packages + deps to canonical BaseOS/AppStream
 BASEOS_DEST="$ALMA_DEST/BaseOS/$ARCH/os"
 APPSTREAM_DEST="$ALMA_DEST/AppStream/$ARCH/os"
 mkdir -p "$BASEOS_DEST" "$APPSTREAM_DEST"
-# Drop stale rpms so a changed kernel/version set never leaves orphans behind
-# (e.g. kernel-debug-* from an earlier kernel) polluting the served repos.
-find "$ALMA_DEST" -name '*.rpm' -delete
+
 # Only the packages the nodes install from Alma sources (see prepare.py), with
 # their full dependency closure. `uname -r` is the kernel ALL lab VMs share
 # (same cloud image); if a node's kernel ever differs, bump this list.
@@ -77,35 +75,63 @@ find "$ALMA_DEST" -name '*.rpm' -delete
 # nftables provides the `nft` CLI for inspecting/verifying the kube-proxy
 # nftables ruleset from the host.
 # Resolve strictly against the VM's own baseos/appstream repos, which repo.py
-# has pointed at the NJU upstream mirror. Download into a scratch dir, then
-# classify each rpm by source repo so the mirror keeps the canonical layout.
-# The dep list after the leaves is explicit: `dnf download --resolve` skips
-# deps that are ALREADY INSTALLED on the mirror VM (libnftnl/iptables-libs/
-# jansson/libmnl/gmp/readline/... are base-system packages there), which would
-# leave the nodes without them; naming them forces the download anyway.
-ALMA_TMP="$(mktemp -d)"
+# has pointed at the NJU upstream mirror. The dep list after the leaves is
+# explicit: --resolve skips deps that are ALREADY INSTALLED on the mirror VM
+# (libnftnl/iptables-libs/jansson/libmnl/gmp/readline/... are base-system
+# packages there), which would leave the nodes without them; naming them forces
+# the download anyway.
 # install_weak_deps=0: iptables-nft ships conditional weak deps
-# (kernel-debug-*-core/modules-core, ...) that dnf --resolve would otherwise
-# pull in wholesale; the nodes only need the strict dep closure.
-retry_n 5 dnf download --resolve --setopt=install_weak_deps=0 \
-    --disablerepo='*' --enablerepo=baseos --enablerepo=appstream \
-    --destdir="$ALMA_TMP" \
-    "kernel-modules-extra-$(uname -r)" container-selinux iptables-nft nftables \
+# (kernel-debug-*-core/modules-core, ...) that --resolve would otherwise pull
+# in wholesale; the nodes only need the strict dep closure.
+ALMA_LEAVES=( "kernel-modules-extra-$(uname -r)" container-selinux iptables-nft nftables \
     iptables-libs libnftnl libmnl libnetfilter_conntrack libnfnetlink \
-    jansson gmp readline
-dnf --disablerepo='*' --enablerepo=baseos -q repoquery --qf='%{NAME}\n' -a | sort -u > "$ALMA_TMP/baseos.names"
-dnf --disablerepo='*' --enablerepo=appstream -q repoquery --qf='%{NAME}\n' -a | sort -u > "$ALMA_TMP/appstream.names"
-for rpm in "$ALMA_TMP"/*.rpm; do
-    name="$(rpm -qp --qf '%{NAME}' "$rpm" 2>/dev/null)"
-    if grep -Fxq "$name" "$ALMA_TMP/baseos.names"; then
-        mv "$rpm" "$BASEOS_DEST/"
-    elif grep -Fxq "$name" "$ALMA_TMP/appstream.names"; then
-        mv "$rpm" "$APPSTREAM_DEST/"
-    else
-        echo "[warn] $name not found in baseos/appstream; defaulting to AppStream" >&2
-        mv "$rpm" "$APPSTREAM_DEST/"
-    fi
-done
+    jansson gmp readline )
+ALMA_TMP="$(mktemp -d)"
+# The synced rpms live on a persistent volume mounted at /var/www/repos (see
+# incus/incus_vms.py), so this sync is strictly incremental: resolve the exact
+# closure WITHOUT downloading (`dnf download --url --resolve` prints one
+# absolute upstream URL per package in the closure), fetch only the rpms not
+# already mirrored, and drop only rpms that fell out of the closure (stale
+# kernels etc.) — unchanged files are never re-downloaded.
+trap 'rm -rf "$ALMA_TMP"' EXIT
+
+if ! dnf -q download --url --resolve --setopt=install_weak_deps=0 \
+    --disablerepo='*' --enablerepo=baseos --enablerepo=appstream \
+    "${ALMA_LEAVES[@]}" 2>/dev/null | sort -u > "$ALMA_TMP/closure.urls"; then
+    echo "[error] could not resolve the Alma closure" >&2
+    exit 1
+fi
+[ -s "$ALMA_TMP/closure.urls" ] || { echo "[error] empty Alma closure; refusing to prune" >&2; exit 1; }
+# dnf 4.20 (dnf5 backend) has no %{location} queryformat tag; rely on the URL
+# instead. The source repo BaseOS/AppStream rides along in the path, which also
+# makes the download below exact (no spec re-resolution, no version drift).
+awk -F/ '{print $NF}' "$ALMA_TMP/closure.urls" | sort -u > "$ALMA_TMP/wanted"
+find "$BASEOS_DEST" "$APPSTREAM_DEST" -maxdepth 1 -type f -name '*.rpm' -printf '%f\n' 2>/dev/null \
+    | sort -u > "$ALMA_TMP/present"
+comm -23 "$ALMA_TMP/wanted" "$ALMA_TMP/present" > "$ALMA_TMP/missing"
+comm -13 "$ALMA_TMP/wanted" "$ALMA_TMP/present" > "$ALMA_TMP/stale"
+
+# Prune rpms that are no part of the closure (e.g. an older kernel's
+# kernel-debug-*), so the served repos never carry orphans.
+while IFS= read -r f; do rm -f "$BASEOS_DEST/$f" "$APPSTREAM_DEST/$f"; done < "$ALMA_TMP/stale"
+
+if [ -s "$ALMA_TMP/missing" ]; then
+    # Download ONLY the missing rpms, straight into the canonical repo layout:
+    # the URL's path segment decides BaseOS vs AppStream.
+    while IFS= read -r url; do
+        fn="$(basename "$url")"
+        grep -Fxq "$fn" "$ALMA_TMP/missing" || continue
+        case "$url" in
+            */BaseOS/*) dest="$BASEOS_DEST" ;;
+            */AppStream/*) dest="$APPSTREAM_DEST" ;;
+            *) echo "[error] $url outside BaseOS/AppStream; refusing to mirror" >&2; exit 1 ;;
+        esac
+        retry_n 5 curl -fsSL -o "$dest/$fn" "$url"
+    done < "$ALMA_TMP/closure.urls"
+else
+    echo "[ok] Alma closure already fully mirrored; nothing to download"
+fi
+trap - EXIT
 rm -rf "$ALMA_TMP"
 createrepo_c --update "$BASEOS_DEST"
 createrepo_c --update "$APPSTREAM_DEST"
@@ -115,7 +141,13 @@ mkdir -p "$K8S_DEST/repodata"
 retry_n 5 curl -fsSL -o "$K8S_DEST/repodata/repomd.xml.key" "$K8S_KEY_URL" || echo "[warn] k8s gpg key fetch failed"
 retry_n 5 curl -fsSL -o "$DOCKER_DEST/gpg" "$DOCKER_KEY_URL" || echo "[warn] docker gpg key fetch failed"
 
-echo "==[selinux]== relabel served tree for nginx"
-chcon -R -t httpd_sys_content_t "$REPO_ROOT" 2>/dev/null || true
+echo "==[selinux]== relabel served tree for nginx (skip when SELinux is disabled)"
+# repo.py registers the httpd_sys_content_t fcontext mapping; restorecon applies
+# it to existing/new files idempotently. chcon would force a rewrite every sync.
+if getenforce 2>/dev/null | grep -qiE 'enforcing|permissive'; then
+    restorecon -R "$REPO_ROOT"
+else
+    echo "[skip] SELinux disabled; no relabel needed"
+fi
 
 echo "== done =="

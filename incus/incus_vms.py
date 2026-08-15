@@ -9,7 +9,12 @@ Run:
     INCUS_VMS=k8s-master uv run incus/incus_vms.py
     uv run incus/incus_vms.py --destroy                # destroy all
     uv run incus/incus_vms.py --destroy k8s-master
+    uv run incus/incus_vms.py --destroy k8s-repo --purge-repos-data  # also wipe mirror data
     uv run incus/incus_vms.py --parallel 8
+
+The k8s-repo mirror VM gets a persistent incus volume (k8s-repo-repos) mounted
+at /var/www/repos; --destroy keeps it so rebuilding the VM does not re-download
+the mirror. Use --purge-repos-data to delete it explicitly.
 """
 
 import argparse
@@ -20,6 +25,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "deploy"))
+
+import _alma_repos
 
 import config
 
@@ -38,6 +46,15 @@ LAB_PASSWORD_HASH = os.environ.get(
 VMS = config.VMS
 DEFAULT_PARALLEL = 4
 
+# The mirror VM's data lives on a persistent incus custom volume mounted at
+# /var/www/repos, so rebuilding k8s-repo does not re-download the mirror (the
+# repo-sync script is incremental for k8s/docker, and its Alma closure sync now
+# downloads only missing rpms). The volume is created/attached automatically
+# and is NOT deleted by --destroy (use --purge-repos-data to wipe it).
+REPOS_VOLUME = "k8s-repo-repos"
+REPOS_MOUNT_PATH = "/var/www/repos"
+STORAGE_POOL = os.environ.get("INCUS_STORAGE_POOL", "default")
+
 
 def run(cmd: list[str], *, check: bool = True, **kwargs) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, text=True, check=check, **kwargs)
@@ -52,13 +69,80 @@ def vm_exists(name: str) -> bool:
     return bool(out) and name in out
 
 
+def repo_volume_exists() -> bool:
+    out = run(
+        ["incus", "storage", "volume", "list", STORAGE_POOL, "--format=compact"],
+        check=False,
+        capture_output=True,
+    ).stdout
+    return REPOS_VOLUME in out
+
+
+def ensure_repo_volume() -> None:
+    """Create the persistent repos volume if it does not exist yet."""
+    if repo_volume_exists():
+        return
+    run(["incus", "storage", "volume", "create", STORAGE_POOL, REPOS_VOLUME])
+    print(f"[data] created persistent repos volume {REPOS_VOLUME}")
+
+
+def attach_repo_volume(name: str) -> None:
+    """Attach the persistent repos volume to the mirror VM at /var/www/repos."""
+    ensure_repo_volume()
+    if not any(d == "repos" for d in run(
+        ["incus", "config", "device", "list", name],
+        check=False,
+        capture_output=True,
+    ).stdout.split()):
+        run(
+            [
+                "incus",
+                "config",
+                "device",
+                "add",
+                name,
+                "repos",
+                "disk",
+                f"pool={STORAGE_POOL}",
+                f"source={REPOS_VOLUME}",
+                f"path={REPOS_MOUNT_PATH}",
+            ]
+        )
+        print(f"[data] attached {REPOS_VOLUME} -> {REPOS_MOUNT_PATH} on {name}")
+
+
+def purge_repo_volume() -> None:
+    """Delete the persistent repos volume (wipes all mirrored data)."""
+    if not repo_volume_exists():
+        return
+    run(["incus", "storage", "volume", "delete", STORAGE_POOL, REPOS_VOLUME])
+    print(f"[data] purged persistent repos volume {REPOS_VOLUME}")
+
+
 def user_data(name: str) -> str:
     hosts = "\n".join(f"      {s['ip']} {n}" for n, s in VMS.items())
     with open(SSH_PUB_KEY) as f:
         key = f.read().strip()
     hosts_file = f"      127.0.0.1   localhost\n{hosts}"
+    # Alma repos are fully managed: cloud-init writes the rendered templates
+    # (see deploy/_alma_repos.py) at the NJU upstream. Role per VM: the mirror
+    # VM (k8s-repo) reproduces the stock enable-all state, k8s nodes enable
+    # only BaseOS/AppStream (internal mirror serves just those). deploy/repo.py
+    # and deploy/prepare.py later push the same render under their own role.
+    consumer = "mirror" if name == config.REPO_MIRROR_HOSTNAME else "node"
+    repo_files = "\n".join(
+        f"  - path: /etc/yum.repos.d/{dest}\n"
+        "    content: |\n"
+        + "\n".join(
+            f"      {line}" for line in _alma_repos.render_alma_repo(
+                src, dest, config.ALMA_UPSTREAM_BASE, consumer=consumer
+            ).splitlines()
+        )
+        for dest, src in sorted(_alma_repos.alma_repo_templates().items())
+    )
     return f"""#cloud-config
 hostname: {name}
+timezone: Asia/Shanghai
 users:
   - name: {USER}
     groups: [wheel]
@@ -73,8 +157,8 @@ write_files:
   - path: /etc/hosts
     content: |
 {hosts_file}
+{repo_files}
 runcmd:
-  - sed -i -e 's|^mirrorlist=|# mirrorlist=|' -e 's|^# baseurl=https://repo.almalinux.org/almalinux/|baseurl={config.ALMA_UPSTREAM_BASE}/|' /etc/yum.repos.d/almalinux-*.repo
   - dnf clean all
   - dnf -y upgrade
   - dnf -y install rsync openssh-server
@@ -124,16 +208,20 @@ def create_vm(name: str) -> None:
             f"ipv4.address={spec['ip']}",
         ]
     )
+    if name == config.REPO_MIRROR_HOSTNAME:
+        attach_repo_volume(name)
     run(["incus", "start", name])
     run(["incus", "wait", name, "agent"], check=False)
 
 
-def destroy_vm(name: str) -> None:
+def destroy_vm(name: str, *, purge_data: bool = False) -> None:
     if not vm_exists(name):
         print(f"[skip] {name} does not exist")
         return
     run(["incus", "delete", "--force", name])
     print(f"[done] {name} destroyed")
+    if purge_data and name == config.REPO_MIRROR_HOSTNAME:
+        purge_repo_volume()
 
 
 def run_parallel(names: set[str], fn, parallel: int) -> None:
@@ -159,6 +247,11 @@ def main() -> None:
         default=int(os.environ.get("INCUS_PARALLEL", DEFAULT_PARALLEL)),
         help=f"max worker threads (default {DEFAULT_PARALLEL})",
     )
+    parser.add_argument(
+        "--purge-repos-data",
+        action="store_true",
+        help="with --destroy: also delete the persistent k8s-repo repos volume",
+    )
     args = parser.parse_args()
 
     provided = {*args.vms, *VM_SELECT}
@@ -169,7 +262,11 @@ def main() -> None:
         selected = provided
     else:
         selected = set(VMS)
-    run_parallel(selected, destroy_vm if args.destroy else create_vm, args.parallel)
+    run_parallel(
+        selected,
+        (lambda n: destroy_vm(n, purge_data=args.purge_repos_data)) if args.destroy else create_vm,
+        args.parallel,
+    )
 
 
 main()

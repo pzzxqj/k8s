@@ -3,7 +3,7 @@
 Everything the nodes install comes from intranet sources only:
   * AlmaLinux base packages (kernel-modules-extra, container-selinux, ...) ->
     BaseOS/AppStream mirrored on the internal vm (deploy/repo.py), via the
-    original /etc/yum.repos.d/almalinux-*.repo files re-pointed at the mirror
+    managed almalinux-*.repo templates pushed to each node (deploy/prepare.py)
   * k8s/containerd RPMs -> the same mirror, via kubernetes.repo + docker-ce.repo
   * container images + Cilium -> the offline bundle at /opt/k8s-offline, already
     pushed there by scripts/download_offline.py (rsync, no pyinfra).
@@ -22,9 +22,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import _alma_repos
 import _common
 from pyinfra.context import host
-from pyinfra.facts.files import FindInFile
+from pyinfra.facts.files import FileContents, FindFiles, FindInFile
 from pyinfra.facts.server import Command, Selinux
 from pyinfra.operations import files, server
 
@@ -35,39 +36,58 @@ is_master = _common.is_master()
 # NOTE: the SFTP subsystem is enabled in cloud-init (incus/incus_vms.py); it is
 # required by files.put / dnf.repo.
 
-# 1. Fully intranet dnf: keep the node's original almalinux-*.repo files (which
-# preserve per-repo layout, module metadata and the disabled debug/source
-# sections) but comment their mirrorlist and point baseurl at the internal
-# mirror (repo.py mirrors the canonical BaseOS/AppStream layout, so only the
-# host prefix changes). Idempotent: once the NJU/repo.almalinux.org baseurl is
-# swapped, the pattern no longer matches on re-runs. cloud-init already
-# commented mirrorlist + pointed baseurl at NJU; we override that here.
+# 1. Fully managed Alma repo files: every /etc/yum.repos.d/almalinux*.repo is
+# pushed (not sed-edited) from the same vendored templates as cloud-init and
+# repo.py (see deploy/_alma_repos.py), pointed at the internal mirror. Nodes
+# use consumer="node", which enables only BaseOS/AppStream — the two repos the
+# internal mirror serves — and disables every other repo's primary section. Any
+# almalinux*.repo not covered by a template is removed (fully declared set).
+# `dnf clean all` runs only when a managed file differs from its rendered
+# template or a stray file is purged — on converged nodes this step is a noop.
 alma_mirror_prefix = f"{config.REPO_MIRROR_URL}/{config.ALMA_SERVED_PATH.split('/', 1)[0]}"
-server.shell(
-    name="Point the original AlmaLinux repo files at the internal mirror",
-    commands=[
-        (
-            "sed -i "
-            "-e 's|^mirrorlist=|# mirrorlist=|' "
-            f"-e 's|^baseurl={config.ALMA_UPSTREAM_BASE}/|baseurl={alma_mirror_prefix}/|' "
-            f"-e 's|^baseurl=https://repo.almalinux.org/almalinux/|baseurl={alma_mirror_prefix}/|' "
-            "/etc/yum.repos.d/almalinux-*.repo"
-        ),
-        # The mirror only serves BaseOS + AppStream; keep those enabled but
-        # disable the primary section of every other Alma repo (crb, extras,
-        # ...) so dnf doesn't fail on their (non-mirrored) 404 paths. Idempotent:
-        # `enabled=1` is only ever flipped once; files with no enabled=1 are
-        # left untouched. baseos/appstream files are skipped entirely.
-        (
-            "for f in /etc/yum.repos.d/almalinux-*.repo; do "
-            "  case \"$f\" in *baseos*|*appstream*) continue;; esac; "
-            "  sed -i '0,/^enabled=1$/s//enabled=0/' \"$f\"; "
-            "done"
-        ),
-        "dnf clean all",
-    ],
-    _sudo=True,
-)
+tpl = _alma_repos.alma_repo_templates()
+# FindFiles returns absolute paths; compare basenames against the template set.
+remote = {
+    Path(f).name
+    for f in (host.get_fact(FindFiles, "/etc/yum.repos.d", fname="almalinux*.repo") or [])
+}
+
+
+def _alma_repo_consistent(dest: str, src) -> bool:
+    lines = host.get_fact(FileContents, path=f"/etc/yum.repos.d/{dest}")
+    if lines is None:
+        return False
+    rendered = _alma_repos.render_alma_repo(src, dest, alma_mirror_prefix, consumer="node")
+    return "\n".join(lines).rstrip("\n") == rendered.rstrip("\n")
+
+
+need_clean = any(
+    not _alma_repo_consistent(d, s) for d, s in tpl.items()
+) or any(f not in tpl for f in remote)
+
+for dest, src in sorted(tpl.items()):
+    files.template(
+        name=f"Point {dest} at the internal mirror",
+        src=str(src),
+        dest=f"/etc/yum.repos.d/{dest}",
+        mode="0644",
+        alma_base=alma_mirror_prefix,
+        enabled=_alma_repos.alma_repo_enabled(dest, consumer="node"),
+        _sudo=True,
+    )
+for stray in sorted(set(remote) - set(tpl)):
+    files.file(
+        name=f"Remove unmanaged Alma repo {Path(stray).name}",
+        path=f"/etc/yum.repos.d/{Path(stray).name}",
+        present=False,
+        _sudo=True,
+    )
+if need_clean:
+    server.shell(
+        name="Clear dnf metadata cache (Alma repo files changed)",
+        commands=["dnf clean all"],
+        _sudo=True,
+    )
 
 # 2. Mirror-provided AlmaLinux base packages (kernel-modules-extra, dnf
 # tooling). Pin kernel-modules-extra to the RUNNING kernel: `dnf install
