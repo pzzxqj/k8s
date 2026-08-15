@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _alma_repos
 from pyinfra.context import host
 from pyinfra.facts.files import FileContents, FindFiles
+from pyinfra.facts.selinux import FileContext, FileContextMapping
 from pyinfra.facts.server import Selinux
 from pyinfra.operations import files, selinux, server, systemd
 
@@ -142,11 +143,18 @@ files.template(
     _sudo=True,
 )
 
-# 5. nginx server block + a conditional SELinux relabel. The relabel only kicks
-# in when SELinux is loaded (this VM boots with it disabled, in which case nginx
-# serves fine and semanage/restorecon would error); when enabled, the fcontext
-# mapping is added/modified declaratively (-a vs -m) and restorecon applies it
-# to existing files idempotently (it skips already-correct labels).
+# 5. nginx server block + a conditional SELinux fcontext rule. The rule only
+# matters when SELinux is loaded: skip it entirely when mode == disabled, then
+# consult the actual policy state — the FileContextMapping fact (is the rule
+# present/wrong?) and the FileContext fact (does /var/www/repos carry a
+# mismatched label?) — and only register the mapping when one of them differs,
+# so a converged run reports no changes. file_context_mapping writes the policy
+# rule (declaratively, -a vs -m) but relabels nothing itself; applying it to
+# already-existing files is a one-time manual step (only needed when the disk
+# holds unlabeled/wrong-labeled files, e.g. right after enabling SELinux):
+#     ssh -i ~/.ssh/id_ed25519 admin@<mirror> 'sudo restorecon -RF /var/www/repos'
+# New files dropped in by each sync get relabeled automatically by repo-sync.sh
+# (guarded restorecon at the end of the sync).
 files.template(
     name="Write nginx repo server block",
     src=str(MIRROR_TEMPLATES / "nginx-repo.conf.j2"),
@@ -154,20 +162,22 @@ files.template(
     mirror_root=MIRROR_ROOT,
     _sudo=True,
 )
-if (host.get_fact(Selinux) or {}).get("mode") != "disabled":
-    selinux.file_context_mapping(
-        name="Map /var/www/repos to httpd_sys_content_t",
-        target=r"/var/www/repos(/.*)?",
-        se_type="httpd_sys_content_t",
-        _sudo=True,
-    )
-    server.shell(
-        name="Apply SELinux context to existing mirror files",
-        commands=["restorecon -RF /var/www/repos"],
-        _sudo=True,
-    )
+if host.get_fact(Selinux).get("mode") == "disabled":
+    print("[skip] SELinux disabled; no fcontext rule needed")
 else:
-    print("[skip] SELinux disabled; no fcontext relabel needed")
+    mapping = (
+        host.get_fact(FileContextMapping, target=r"/var/www/repos(/.*)?", _sudo=True) or {}
+    )
+    fctx = host.get_fact(FileContext, path=MIRROR_ROOT) or {}
+    if mapping.get("type") != "httpd_sys_content_t" or fctx.get("type") != "httpd_sys_content_t":
+        selinux.file_context_mapping(
+            name="Map /var/www/repos to httpd_sys_content_t",
+            target=r"/var/www/repos(/.*)?",
+            se_type="httpd_sys_content_t",
+            _sudo=True,
+        )
+    else:
+        print("[skip] fcontext rule and /var/www/repos already httpd_sys_content_t")
 
 def _unit_consistent(dest: str) -> bool:
     """True when the installed unit file matches its (static) template."""
