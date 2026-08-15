@@ -61,10 +61,14 @@ files.template(
     _sudo=True,
 )
 
-# 2. Bootstrap the control plane (once)
+# 2. Bootstrap the control plane (once). kube-proxy is NOT installed
+# (--skip-phases=addon/kube-proxy): Cilium fully replaces it via eBPF
+# (see step 5). Leaving kube-proxy in place alongside Cilium's netfilter
+# rules is what previously broke node egress when kube-proxy ran in
+# nftables mode (README "常见问题").
 server.shell(
-    name="Run kubeadm init (control plane bootstrap)",
-    commands=["kubeadm init --config /etc/kubernetes/kubeadm.yaml"],
+    name="Run kubeadm init, skipping the kube-proxy addon (control plane bootstrap)",
+    commands=["kubeadm init --config /etc/kubernetes/kubeadm.yaml --skip-phases=addon/kube-proxy"],
     _sudo=True,
     _if=lambda: not cluster_ready,
 )
@@ -96,15 +100,24 @@ server.shell(
 # useDigest=false: the 1.20 chart pins image digests (@sha256:), but our bundle
 # imports images by tag only (docker save + ctr import registers tags, not repo
 # digests), so containerd can't resolve the digest refs offline -> ImagePullBackOff.
+# kubeProxyReplacement=true + k8sServiceHost/Port = full eBPF service LB with NO
+# kube-proxy (kubeadm skipped its addon above). The explicit API server
+# host/port is required because nothing would otherwise DNAT the 10.96.0.1
+# "kubernetes" ClusterIP at bootstrap time (that's kube-proxy's usual job;
+# Cilium only learns it from these flags before its own BPF LB is live).
 server.shell(
-    name="Install Cilium CNI from local chart",
+    name="Install Cilium CNI from local chart (kube-proxy free)",
     commands=[
         (
             "kubectl -n kube-system get daemonset cilium >/dev/null 2>&1 "
             "&& echo '[skip] Cilium already installed' "
             "|| cilium install "
             "--chart-directory /opt/k8s-offline/cilium/chart "
-            "--set kubeProxyReplacement=false "
+            "--set kubeProxyReplacement=true "
+            "--set k8sServiceHost=" + config.MASTER_IP + " "
+            "--set k8sServicePort=" + config.APISERVER_PORT + " "
+            "--set nodePort.enabled=true "
+            "--set hostPort.enabled=true "
             "--set operator.replicas=1 "
             "--set hubble.enabled=false "
             "--set image.useDigest=false "

@@ -72,8 +72,8 @@ mkdir -p "$BASEOS_DEST" "$APPSTREAM_DEST"
 # their full dependency closure. `uname -r` is the kernel ALL lab VMs share
 # (same cloud image); if a node's kernel ever differs, bump this list.
 # iptables-nft satisfies kubelet's `iptables >= 1.4.21` requirement on Alma 10;
-# nftables provides the `nft` CLI for inspecting/verifying the kube-proxy
-# nftables ruleset from the host.
+# nftables provides the `nft` CLI for inspecting the node's netfilter ruleset
+# (Cilium runs kube-proxy-free eBPF, so no kube-proxy nft table exists).
 # Resolve strictly against the VM's own baseos/appstream repos, which repo.py
 # has pointed at the NJU upstream mirror. The dep list after the leaves is
 # explicit: --resolve skips deps that are ALREADY INSTALLED on the mirror VM
