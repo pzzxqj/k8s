@@ -182,15 +182,8 @@ server.shell(
     name="Turn off any active swap",
     commands=["swapoff -a"],
     _sudo=True,
-    _if=lambda: (
-        (
-            host.get_fact(
-                Command, "swapon --show 2>/dev/null | grep -q . && echo yes || echo no"
-            )
-            or ""
-        ).strip()
-        == "yes"
-    ),
+    # /proc/swaps always carries a header line; extra lines mean active swap
+    _if=lambda: len(host.get_fact(FileContents, path="/proc/swaps") or []) > 1,
 )
 
 # 6. SELinux permissive
