@@ -36,20 +36,27 @@ k8s/containerd 组件通过 **内网 dnf 镜像源**（k8s-repo）安装；容�
 ```
 config.py                # 单一事实来源：拓扑/目录/VM 规格/镜像源常量
 inventory.py             # pyinfra 分组（k8s_nodes / k8s_master / k8s_workers / k8s_repo）
-Justfile                 # just 命令入口：vm-create / vm-destroy / offline / repo / all
+Justfile                 # just 命令入口：vm-create / vm-destroy / repo / offline / prepare / init / join / verify / all
 deploy/                  # pyinfra 部署脚本
+  _common.py             #   共享 helper（is_master / safe_file_exists / 远程路径常量）
+  _alma_repos.py         #   Alma 镜像源模板渲染/一致性检查（见 templates/alma-repo/）
   repo.py                #   k8s-repo：nginx + reposync 镜像源（配置/每日 timer；首次同步手动触发）
   prepare.py             #   所有节点：内核/镜像源指向/containerd/k8s RPM/镜像预载
   init.py                #   master：kubeadm init + Cilium 离线安装
   join.py                #   workers：kubeadm join
-incus/incus_vms.py       # 创建/销毁 VM（原生 Python + 线程池并行，不依赖 pyinfra）
+incus/
+  incus_vms.py           # 创建/销毁 VM（原生 Python + 线程池并行，不依赖 pyinfra）
+  _incus.py              #   共享 incus CLI 封装（run / instance_exists / instance_running）
 templates/               # 远程配置文件 jinja2 模板
   kubernetes.repo.j2     #   节点端 k8s dnf 源（指向 k8s-repo）
   docker-ce.repo.j2      #   节点端 containerd dnf 源（指向 k8s-repo）
+  alma-repo/             #   受管 Alma almalinux-*.repo.j2 模板（由 _alma_repos.py 渲染）
   mirror/                #   镜像 VM 端模板（nginx、repo-sync、timer、上游源）
 scripts/
   download_offline.py    # 宿主机下载离线包（kubeadm config images list + Cilium）并 rsync 到节点
   import_images.sh       # 节点端镜像导入助手（随包上传到 /opt/k8s-offline/）
+  verify_cluster.py      # 集群验证（官方 kubernetes client，见「验证」）
+  snapshot_alma_repos.py # 从新版 Alma VM 重新抓取 almalinux-*.repo 生成受管模板
 offline/                 # 生成的离线包（已 gitignore）
 ```
 
@@ -84,7 +91,10 @@ just verify      # 集群验证（依赖 join）
 
 ## 验证
 
+`just verify` 自动完成核心检查（`scripts/verify_cluster.py` 用官方 kubernetes client 读 master 的 admin.conf）：3 节点 Ready（含 kubelet 版本）、cilium DaemonSet 全调度就绪、无 kube-proxy DaemonSet（kube-proxy free）、kube-system 全部 Pod Running/Succeeded、coredns Deployment 全可用；任一失败即非零退出。
+
 ```bash
+just verify      # 自动核心检查；也可手动 ssh 复查：
 ssh admin@10.98.68.13 curl -s http://localhost/k8s/core:/stable:/v1.36/rpm/  # 镜像源 repodata
 ssh admin@10.98.68.10
 kubectl get nodes -o wide          # 3 个节点 Ready

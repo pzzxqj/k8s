@@ -73,10 +73,15 @@ join: init
         {{ offline_dir }}/join-command.txt
     uv run pyinfra -y inventory.py deploy/join.py --limit k8s_workers --user {{ ssh_user }} --key {{ key }}
 
-# Verify the cluster: nodes Ready + core kube-system pods.
+# Verify the cluster: fetch the admin kubeconfig (the /etc/kubernetes/admin.conf
+# copy is 0600 root-only; ~admin/.kube/config is the identical admin-readable
+# copy installed by init.py), then check nodes Ready + Cilium (no kube-proxy) +
+# coredns + kube-system pods via the kubernetes client.
 verify: join
-    ssh -i {{ key }} -o StrictHostKeyChecking=accept-new {{ ssh_user }}@{{ master_ip }} \
-        'kubectl get nodes -o wide; echo; kubectl -n kube-system get pods -o wide'
+    scp -i {{ key }} -o StrictHostKeyChecking=accept-new \
+        {{ ssh_user }}@{{ master_ip }}:/home/{{ ssh_user }}/.kube/config \
+        {{ offline_dir }}/admin.conf
+    uv run python scripts/verify_cluster.py --kubeconfig {{ offline_dir }}/admin.conf
 
 # Full cluster orchestration (repo -> offline -> prepare -> init -> join -> verify)
 all: verify

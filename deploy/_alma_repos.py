@@ -76,3 +76,21 @@ def render_alma_repo(template: Path, dest_filename: str, alma_base: str, *, cons
         alma_base=alma_base,
         enabled=alma_repo_enabled(dest_filename, consumer=consumer),
     )
+
+
+def alma_repo_consistent(dest: str, src: Path, alma_base: str, *, consumer: str) -> bool:
+    """True when the installed /etc/yum.repos.d/<dest> matches its render.
+
+    Used by deploy/repo.py and deploy/prepare.py to decide whether a `dnf clean
+    all` is needed. Only ever called during a pyinfra deploy, so the pyinfra
+    imports stay function-local (this module is also imported by non-pyinfra
+    tooling: incus/incus_vms.py, scripts/snapshot_alma_repos.py).
+    """
+    from pyinfra.context import host
+    from pyinfra.facts.files import FileContents
+
+    lines = host.get_fact(FileContents, path=f"/etc/yum.repos.d/{dest}")
+    if lines is None:
+        return False
+    rendered = render_alma_repo(src, dest, alma_base, consumer=consumer)
+    return "\n".join(lines).rstrip("\n") == rendered.rstrip("\n")

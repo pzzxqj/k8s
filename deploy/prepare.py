@@ -26,12 +26,44 @@ import _alma_repos
 import _common
 from pyinfra.context import host
 from pyinfra.facts.files import FileContents, FindFiles, FindInFile
-from pyinfra.facts.server import Command, Selinux
-from pyinfra.operations import files, server
+from pyinfra.facts.server import Command
+from pyinfra.operations import files, server, systemd
 
 import config
 
 is_master = _common.is_master()
+
+
+def _images_imported() -> bool:
+    """True when every image this node needs is already in containerd.
+
+    Mirrors import_images.sh's own scope logic against the same import-plan.txt
+    source of truth, so a converged node skips the preload step entirely.
+    """
+    scope = "master" if is_master else "all"
+    plan = (
+        host.get_fact(FileContents, path=f"{config.NODE_OFFLINE_DIR}/images/import-plan.txt")
+        or []
+    )
+    wanted: set[str] = set()
+    for line in plan:
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        s, ref = parts
+        if s == "all" or (s == "master" and scope == "master"):
+            wanted.add(ref)
+    if not wanted:
+        return False
+    present = set(
+        (
+            host.get_fact(
+                Command, "sudo ctr -n k8s.io images ls -q 2>/dev/null || true"
+            )
+            or ""
+        ).split()
+    )
+    return wanted <= present
 
 # NOTE: the SFTP subsystem is enabled in cloud-init (incus/incus_vms.py); it is
 # required by files.put / dnf.repo.
@@ -52,17 +84,9 @@ remote = {
     for f in (host.get_fact(FindFiles, "/etc/yum.repos.d", fname="almalinux*.repo") or [])
 }
 
-
-def _alma_repo_consistent(dest: str, src) -> bool:
-    lines = host.get_fact(FileContents, path=f"/etc/yum.repos.d/{dest}")
-    if lines is None:
-        return False
-    rendered = _alma_repos.render_alma_repo(src, dest, alma_mirror_prefix, consumer="node")
-    return "\n".join(lines).rstrip("\n") == rendered.rstrip("\n")
-
-
 need_clean = any(
-    not _alma_repo_consistent(d, s) for d, s in tpl.items()
+    not _alma_repos.alma_repo_consistent(d, s, alma_mirror_prefix, consumer="node")
+    for d, s in tpl.items()
 ) or any(f not in tpl for f in remote)
 
 for dest, src in sorted(tpl.items()):
@@ -93,11 +117,13 @@ if need_clean:
 # tooling). Pin kernel-modules-extra to the RUNNING kernel: `dnf install
 # kernel-modules-extra` would otherwise pull the newest patch whose module
 # tree doesn't match the booted kernel, leaving br_netfilter unloadable.
+# Gated on rpm, so a converged node skips the dnf call.
 running_kernel = (host.get_fact(Command, "uname -r") or "").strip()
 server.shell(
     name=f"Ensure kernel-modules-extra matches running kernel ({running_kernel})",
     commands=[f"dnf install -y kernel-modules-extra-{running_kernel}"],
     _sudo=True,
+    _if=lambda: not rpm_db_has(f"kernel-modules-extra-{running_kernel}"),
 )
 
 # container-selinux is a hard dependency of the containerd.io RPM and is only
@@ -156,6 +182,15 @@ server.shell(
     name="Turn off any active swap",
     commands=["swapoff -a"],
     _sudo=True,
+    _if=lambda: (
+        (
+            host.get_fact(
+                Command, "swapon --show 2>/dev/null | grep -q . && echo yes || echo no"
+            )
+            or ""
+        ).strip()
+        == "yes"
+    ),
 )
 
 # 6. SELinux permissive
@@ -175,7 +210,11 @@ files.line(
 server.shell(
     name="Set the current SELinux mode to permissive",
     commands=["setenforce 0"],
-    _if=lambda: host.get_fact(Selinux).get("mode") == "enabled",
+    # Selinux fact only reports enabled/disabled (sestatus), not the enforcing
+    # mode — probe the current mode so a converged run no-ops.
+    _if=lambda: (
+        host.get_fact(Command, "getenforce 2>/dev/null || echo unknown").strip() == "Enforcing"
+    ),
     _sudo=True,
 )
 
@@ -255,13 +294,16 @@ server.shell(
         f"bash {config.NODE_OFFLINE_DIR}/import_images.sh {'master' if is_master else 'all'}"
     ],
     _sudo=True,
+    _if=lambda: not _images_imported(),
 )
 
 # 12. kubelet ships its own systemd unit; enable it (start happens at init/join).
-# systemctl enable (not a running-state op) so re-running prep never stops a
-# kubelet that is already serving a joined node.
-server.shell(
+# running=None: enable only, never touch the running state, so re-running prep
+# never stops a kubelet that is already serving a joined node.
+systemd.service(
     name="Enable kubelet at boot",
-    commands=["systemctl enable kubelet"],
+    service="kubelet",
+    enabled=True,
+    running=None,  # pyright: ignore[reportArgumentType] - pyinfra util/service accepts None (enable only)
     _sudo=True,
 )

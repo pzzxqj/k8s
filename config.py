@@ -46,6 +46,8 @@ MASTER_IP = "10.98.68.10"
 # kube-apiserver secure port (kubeadm default 6443). Passed to Cilium as
 # k8sServiceHost/Port in the kube-proxy-free setup (init.py).
 APISERVER_PORT = "6443"
+# Pod-network-agnostic service subnet; kubeadm networking.serviceSubnet.
+SERVICE_SUBNET = "10.96.0.0/12"
 WORKER_IPS = ["10.98.68.11", "10.98.68.12"]
 ALL_NODES = [MASTER_IP, *WORKER_IPS]
 

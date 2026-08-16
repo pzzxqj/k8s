@@ -22,16 +22,17 @@ Run on a machine with incus access (network implied for image pulls):
 
 import argparse
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "deploy"))
+sys.path.insert(0, str(ROOT / "incus"))
 
 
 import _alma_repos
+from _incus import instance_running, run
 
 IMAGE = "images:almalinux/10/cloud"
 DEFAULT_INSTANCE = "alma-repo-ref"
@@ -39,32 +40,30 @@ DEFAULT_INSTANCE = "alma-repo-ref"
 PRIMARY_BASEURL = "# baseurl=https://repo.almalinux.org/almalinux/"
 
 
-def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, text=True, check=check, capture_output=True)
-
-
-def instance_running(name: str) -> bool:
-    out = run(["incus", "list", "--format=compact", name], check=False).stdout
-    return bool(out) and "RUNNING" in out
-
-
 def launch_scratch(name: str) -> None:
     print(f"[launch] creating scratch VM {name} from {IMAGE}")
-    run(["incus", "init", IMAGE, name, "--vm"])
-    run(["incus", "config", "device", "add", name, "agent", "disk", "source=agent:config"])
-    run(["incus", "start", name])
-    run(["incus", "wait", name, "agent"], check=False)
+    run(["incus", "init", IMAGE, name, "--vm"], capture_output=True)
+    run(
+        ["incus", "config", "device", "add", name, "agent", "disk", "source=agent:config"],
+        capture_output=True,
+    )
+    run(["incus", "start", name], capture_output=True)
+    run(["incus", "wait", name, "agent"], check=False, capture_output=True)
     print("[launch] VM running")
 
 
 def destroy(name: str) -> None:
-    run(["incus", "delete", "--force", name])
+    run(["incus", "delete", "--force", name], capture_output=True)
     print(f"[done] destroyed scratch VM {name}")
 
 
 def capture_repo_files(name: str) -> list[str]:
     for _ in range(60):
-        out = run(["incus", "exec", name, "--", "ls", "/etc/yum.repos.d"], check=False)
+        out = run(
+            ["incus", "exec", name, "--", "ls", "/etc/yum.repos.d"],
+            check=False,
+            capture_output=True,
+        )
         if out.returncode == 0:
             files = [
                 line.strip()
@@ -73,14 +72,14 @@ def capture_repo_files(name: str) -> list[str]:
             ]
             if files:
                 return sorted(files)
-        run(["sleep", "1"])
+        run(["sleep", "1"], capture_output=True)
     sys.exit("error: could not list /etc/yum.repos.d on the reference VM")
 
 
 def fetch_raw(name: str, repo_file: str, tmp: Path) -> str:
     src = f"{name}/etc/yum.repos.d/{repo_file}"
     dest = tmp / repo_file
-    run(["incus", "file", "pull", src, str(dest)])
+    run(["incus", "file", "pull", src, str(dest)], capture_output=True)
     return dest.read_text()
 
 
@@ -159,4 +158,5 @@ def main() -> None:
             destroy(args.instance)
 
 
-main()
+if __name__ == "__main__":
+    main()

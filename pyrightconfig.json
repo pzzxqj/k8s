@@ -5,6 +5,7 @@
   "pythonVersion": "3.14",
   "include": ["config.py", "deploy", "incus", "inventory.py", "scripts"],
   "exclude": ["offline", "scripts/offline", "**/__pycache__", "templates"],
+  "extraPaths": ["deploy", "incus"],
   "reportUnusedCallResult": "none",
   "reportImplicitRelativeImport": "none"
 }

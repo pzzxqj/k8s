@@ -65,19 +65,9 @@ remote = {
     for f in (host.get_fact(FindFiles, "/etc/yum.repos.d", fname="almalinux*.repo") or [])
 }
 
-
-def _alma_repo_consistent(dest: str, src) -> bool:
-    lines = host.get_fact(FileContents, path=f"/etc/yum.repos.d/{dest}")
-    if lines is None:
-        return False
-    rendered = _alma_repos.render_alma_repo(
-        src, dest, config.ALMA_UPSTREAM_BASE, consumer="mirror"
-    )
-    return "\n".join(lines).rstrip("\n") == rendered.rstrip("\n")
-
-
 need_clean = any(
-    not _alma_repo_consistent(d, s) for d, s in tpl.items()
+    not _alma_repos.alma_repo_consistent(d, s, config.ALMA_UPSTREAM_BASE, consumer="mirror")
+    for d, s in tpl.items()
 ) or any(f not in tpl for f in remote)
 
 for dest, src in sorted(tpl.items()):
