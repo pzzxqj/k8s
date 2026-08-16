@@ -155,7 +155,7 @@ files.template(
 #     ssh -i ~/.ssh/id_ed25519 admin@<mirror> 'sudo restorecon -RF /var/www/repos'
 # New files dropped in by each sync get relabeled automatically by repo-sync.sh
 # (guarded restorecon at the end of the sync).
-files.template(
+repo_conf = files.template(
     name="Write nginx repo server block",
     src=str(MIRROR_TEMPLATES / "nginx-repo.conf.j2"),
     dest="/etc/nginx/conf.d/repo.conf",
@@ -216,7 +216,7 @@ systemd.service(
 )
 # 7. Serve it (nginx.conf's stock default server must not shadow our block, so
 # reload after writing config). nginx is independent of the sync below.
-server.service(
+systemd.service(
     name="Enable and start nginx",
     service="nginx",
     running=True,
@@ -227,4 +227,5 @@ server.shell(
     name="Reload nginx to pick up repo.conf",
     commands=["nginx -t && systemctl reload nginx || true"],
     _sudo=True,
+    _if=repo_conf.did_change,
 )
