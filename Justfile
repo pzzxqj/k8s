@@ -13,6 +13,11 @@ k8s_repo_path := `uv run python -c "import config; print(config.K8S_REPO_SERVED_
 key := `echo "${SSH_KEY:-$HOME/.ssh/id_ed25519}"`
 offline_dir := env_var_or_default("OFFLINE_DIR", "offline")
 
+# pyinfra confirm flag: "0" (default) = review changes interactively; skip the
+# prompt with: just --set pyinfra_yes 1 <recipe> (the literal value -y can't be
+# passed via --set: just would parse it as its own flag)
+pyinfra_yes := "0"
+
 default:
     @just --list
 
@@ -41,14 +46,14 @@ vm-destroy-data vms="":
 # Idempotent; does NOT run the sync itself (first sync runs manually, then the
 # daily timer). ensure-repo only provisions when the mirrored repo isn't served.
 repo:
-    uv run pyinfra -y inventory.py deploy/repo.py --limit k8s_repo --user {{ ssh_user }} --key {{ key }}
+    uv run pyinfra {{ if pyinfra_yes == "1" { "-y" } else { "" } }} inventory.py deploy/repo.py --limit k8s_repo --user {{ ssh_user }} --key {{ key }}
 
 # Ensure the mirror serves the k8s repodata; provision it only when missing.
 ensure-repo:
     @if curl -fsS -o /dev/null "http://{{ mirror_ip }}/{{ k8s_repo_path }}/repodata/repomd.xml"; then \
         echo "[skip] k8s-repo already provisioned"; \
     else \
-        uv run pyinfra -y inventory.py deploy/repo.py --limit k8s_repo --user {{ ssh_user }} --key {{ key }}; \
+        uv run pyinfra {{ if pyinfra_yes == "1" { "-y" } else { "" } }} inventory.py deploy/repo.py --limit k8s_repo --user {{ ssh_user }} --key {{ key }}; \
     fi
 
 # Build the offline bundle (images/cilium) and rsync it to all nodes. The mirror
@@ -60,18 +65,18 @@ offline args="": ensure-repo
 # Prepare all nodes: kernel/swap/selinux, containerd, k8s RPMs via the mirror,
 # preload the offline images into containerd.
 prepare: offline
-    uv run pyinfra -y inventory.py deploy/prepare.py --limit k8s_nodes --user {{ ssh_user }} --key {{ key }}
+    uv run pyinfra {{ if pyinfra_yes == "1" { "-y" } else { "" } }} inventory.py deploy/prepare.py --limit k8s_nodes --user {{ ssh_user }} --key {{ key }}
 
 # Bootstrap the control plane on the master + install Cilium (offline chart).
 init: prepare
-    uv run pyinfra -y inventory.py deploy/init.py --limit k8s_master --user {{ ssh_user }} --key {{ key }}
+    uv run pyinfra {{ if pyinfra_yes == "1" { "-y" } else { "" } }} inventory.py deploy/init.py --limit k8s_master --user {{ ssh_user }} --key {{ key }}
 
 # Fetch the join command from the master, then join the workers.
 join: init
     scp -i {{ key }} -o StrictHostKeyChecking=accept-new \
         {{ ssh_user }}@{{ master_ip }}:/etc/kubernetes/join-command.txt \
         {{ offline_dir }}/join-command.txt
-    uv run pyinfra -y inventory.py deploy/join.py --limit k8s_workers --user {{ ssh_user }} --key {{ key }}
+    uv run pyinfra {{ if pyinfra_yes == "1" { "-y" } else { "" } }} inventory.py deploy/join.py --limit k8s_workers --user {{ ssh_user }} --key {{ key }}
 
 # Verify the cluster: fetch the admin kubeconfig (the /etc/kubernetes/admin.conf
 # copy is 0600 root-only; ~admin/.kube/config is the identical admin-readable
