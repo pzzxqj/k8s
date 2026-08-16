@@ -27,7 +27,7 @@ import _common
 from pyinfra.context import host
 from pyinfra.facts.files import FileContents, FindFiles, FindInFile
 from pyinfra.facts.server import Command
-from pyinfra.operations import files, server, systemd
+from pyinfra.operations import dnf, files, server, systemd
 
 import config
 
@@ -217,8 +217,9 @@ server.shell(
 # 8. Point dnf at the internal repo mirror (deploy/repo.py serves it, see
 # templates/kubernetes.repo.j2) and install containerd.io + kubelet/kubeadm/
 # kubectl from there. All base deps already resolve from the mirror via the
-# re-pointed almalinux-*.repo files above. Skipped when kubelet is already
-# present so re-running prep never reinstalls/restarts the runtime.
+# re-pointed almalinux-*.repo files above. dnf.packages only installs the
+# missing ones (latest=False, so present packages are never upgraded), keeping
+# a converged re-run from touching the installed runtime.
 def rpm_db_has(pkg: str) -> bool:
     return (
         (
@@ -245,13 +246,18 @@ files.template(
     docker_repo_path=config.DOCKER_REPO_SERVED_PATH,
     _sudo=True,
 )
-server.shell(
+dnf.packages(
     name="Install containerd.io + k8s RPMs + nftables from the internal mirror",
-    commands=[
-        "dnf install -y kubelet kubeadm kubectl cri-tools kubernetes-cni containerd.io nftables"
+    packages=[
+        "kubelet",
+        "kubeadm",
+        "kubectl",
+        "cri-tools",
+        "kubernetes-cni",
+        "containerd.io",
+        "nftables",
     ],
     _sudo=True,
-    _if=lambda: not rpm_db_has("kubelet"),
 )
 
 # 9. containerd config: systemd cgroup driver, matching pause image, CNI dirs
