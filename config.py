@@ -29,16 +29,28 @@ K8S_MINOR = "1.36"
 K8S_REPO_SERVED_PATH = f"k8s/core:/stable:/v{K8S_MINOR}/rpm"
 # Mirrored containerd/docker stable repo path on the mirror.
 DOCKER_REPO_SERVED_PATH = "docker/linux/centos/10/x86_64/stable"
-# Mirrored AlmaLinux 10 necessary packages (deps close over NJU mirror). The
-# nodes install only kernel-modules-extra + container-selinux from Alma sources,
-# so we mirror just those two (with their full dependency closure), served under
-# the canonical Alma layout BaseOS/<arch>/os + AppStream/<arch>/os so the nodes
-# can keep their original .repo files and only swap the baseurl host. NJU chosen
-# over ZJU (measured ~10 MB/s vs ~43 KB/s from this network).
+# Mirrored AlmaLinux 10 repos (full x86_64 set, latest versions only — see
+# repo-sync.sh). Every repo follows the canonical layout
+# <releasever>/<RepoDir>/<arch>/os; the mapping repoid -> upstream dir must
+# match the baseurl in the vendored templates (note "extras" is lowercase
+# upstream). NJU chosen over ZJU (measured ~10 MB/s vs ~43 KB/s from this
+# network).
 ALMA_UPSTREAM_BASE = "https://mirrors.nju.edu.cn/almalinux"
-# Served base dir (subrepos BaseOS/<arch>/os + AppStream/<arch>/os underneath).
+# Served base dir (subrepos <RepoDir>/<arch>/os underneath).
 ALMA_SERVED_PATH = "almalinux/10"
 ALMA_ARCH = "x86_64"
+# repoid -> upstream directory name, for the mirror's full repo sync.
+ALMA_REPO_DIRS = {
+    "baseos": "BaseOS",
+    "appstream": "AppStream",
+    "crb": "CRB",
+    "extras": "extras",
+    "highavailability": "HighAvailability",
+    "nfv": "NFV",
+    "rt": "RT",
+    "saphana": "SAPHANA",
+    "sap": "SAP",
+}
 
 # ---------- topology ----------
 MASTER_HOSTNAME = "k8s-master"

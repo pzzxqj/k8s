@@ -1,11 +1,13 @@
 """Provision the internal repo mirror VM (k8s-repo) with nginx + dnf reposync.
 
 Mirrors the upstream RPM repos (pkgs.k8s.io Kubernetes, download.docker.com
-containerd) into /var/www/repos and serves them over plain HTTP on :80. The
-first sync is started manually (see below); repo-sync.timer re-runs it daily.
+containerd, and the full NJU AlmaLinux 10 set) into /var/www/repos and serves
+them over plain HTTP on :80. The first sync is started manually (see below);
+repo-sync.timer re-runs it daily.
 
-k8s/worker nodes consume this mirror via templates/kubernetes.repo.j2 and
-templates/docker-ce.repo.j2 (see deploy/prepare.py).
+k8s/worker nodes consume this mirror via templates/kubernetes.repo.j2,
+templates/docker-ce.repo.j2 and the managed almalinux-*.repo templates (see
+deploy/_alma_repos.py / deploy/prepare.py).
 
 Run:
     uv run pyinfra -y inventory.py deploy/repo.py --limit k8s_repo \
@@ -49,15 +51,13 @@ MIRROR_TEMPLATES = config.REPO_ROOT / "templates" / "mirror"
 # scripts/snapshot_alma_repos.py), pointed at the NJU upstream mirror:
 # mirrorlists are commented out, and the primary section of each file restores
 # the original stock enablement (consumer="mirror" -> all enabled), because
-# NJU serves every repo. The mirror only *syncs/serves* BaseOS+AppStream
-# (learning lab: just the packages the cluster needs) — that scope is decided
-# by repo-sync.sh's explicit --disablerepo/--enablerepo, not by these files.
-# Any almalinux*.repo not covered by a template is removed, so the file set is
-# fully declared. `dnf clean all` runs only when a managed file differs from
-# its rendered template or a stray file is purged — on a converged VM this
-# whole step is a noop. These repos are reused by repo-sync.sh as the Alma
-# mirror source. Run before packages so the installs below also resolve from
-# NJU.
+# NJU serves every repo. These repos are reused by repo-sync.sh as the Alma
+# mirror source: every arch-specific repo is synced in full (x86_64, latest
+# only) under the canonical <RepoDir>/<arch>/os layout. Any almalinux*.repo not
+# covered by a template is removed, so the file set is fully declared.
+# `dnf clean all` runs only when a managed file differs from its rendered
+# template or a stray file is purged — on a converged VM this whole step is a
+# noop. Run before packages so the installs below also resolve from NJU.
 tpl = _alma_repos.alma_repo_templates()
 # FindFiles returns absolute paths; compare basenames against the template set.
 remote = {
@@ -129,6 +129,7 @@ files.template(
     docker_dest=DOCKER_DEST,
     alma_dest=ALMA_DEST,
     alma_arch=config.ALMA_ARCH,
+    alma_repos=config.ALMA_REPO_DIRS,
     k8s_minor=config.K8S_MINOR,
     _sudo=True,
 )

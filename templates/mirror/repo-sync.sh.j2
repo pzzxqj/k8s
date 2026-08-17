@@ -24,6 +24,13 @@ migrate() { # dest repoid
 
 trim_other_archs() { # dest  (keep $ARCH only, never touch repodata)
     local dest="$1"
+    # Some dnf4 versions stage reposync downloads under a flat Packages/ dir
+    # (even with --norepopath); move them up so the served repo is flat —
+    # createrepo_c only walks the top level of the repo dir.
+    if [ -d "$dest/Packages" ]; then
+        mv "$dest/Packages"/* "$dest/" 2>/dev/null || true
+        rmdir "$dest/Packages" 2>/dev/null || true
+    fi
     find "$dest" -mindepth 1 -maxdepth 1 -type d \
         ! -name "$ARCH" ! -name repodata -exec rm -rf {} +
 }
@@ -63,78 +70,26 @@ retry_n 5 dnf reposync "${DNFSETOPTS[@]}" --repoid=docker-src --norepopath \
     --arch "$ARCH" --newest-only --downloaddir="$DOCKER_DEST"
 createrepo_c --update "$DOCKER_DEST"
 
-echo "==[alma]== syncing necessary packages + deps to canonical BaseOS/AppStream layout ($ALMA_DEST)"
-BASEOS_DEST="$ALMA_DEST/BaseOS/$ARCH/os"
-APPSTREAM_DEST="$ALMA_DEST/AppStream/$ARCH/os"
-mkdir -p "$BASEOS_DEST" "$APPSTREAM_DEST"
-
-# Only the packages the nodes install from Alma sources (see prepare.py), with
-# their full dependency closure. `uname -r` is the kernel ALL lab VMs share
-# (same cloud image); if a node's kernel ever differs, bump this list.
-# iptables-nft satisfies kubelet's `iptables >= 1.4.21` requirement on Alma 10;
-# nftables provides the `nft` CLI for inspecting the node's netfilter ruleset
-# (Cilium runs kube-proxy-free eBPF, so no kube-proxy nft table exists).
-# Resolve strictly against the VM's own baseos/appstream repos, which repo.py
-# has pointed at the NJU upstream mirror. The dep list after the leaves is
-# explicit: --resolve skips deps that are ALREADY INSTALLED on the mirror VM
-# (libnftnl/iptables-libs/jansson/libmnl/gmp/readline/... are base-system
-# packages there), which would leave the nodes without them; naming them forces
-# the download anyway.
-# install_weak_deps=0: iptables-nft ships conditional weak deps
-# (kernel-debug-*-core/modules-core, ...) that --resolve would otherwise pull
-# in wholesale; the nodes only need the strict dep closure.
-ALMA_LEAVES=( "kernel-modules-extra-$(uname -r)" container-selinux iptables-nft nftables \
-    iptables-libs libnftnl libmnl libnetfilter_conntrack libnfnetlink \
-    jansson gmp readline )
-ALMA_TMP="$(mktemp -d)"
-# The synced rpms live on a persistent volume mounted at /var/www/repos (see
-# incus/incus_vms.py), so this sync is strictly incremental: resolve the exact
-# closure WITHOUT downloading (`dnf download --url --resolve` prints one
-# absolute upstream URL per package in the closure), fetch only the rpms not
-# already mirrored, and drop only rpms that fell out of the closure (stale
-# kernels etc.) — unchanged files are never re-downloaded.
-trap 'rm -rf "$ALMA_TMP"' EXIT
-
-if ! dnf -q download --url --resolve --setopt=install_weak_deps=0 \
-    --disablerepo='*' --enablerepo=baseos --enablerepo=appstream \
-    "${ALMA_LEAVES[@]}" 2>/dev/null | sort -u > "$ALMA_TMP/closure.urls"; then
-    echo "[error] could not resolve the Alma closure" >&2
-    exit 1
-fi
-[ -s "$ALMA_TMP/closure.urls" ] || { echo "[error] empty Alma closure; refusing to prune" >&2; exit 1; }
-# dnf 4.20 (dnf5 backend) has no %{location} queryformat tag; rely on the URL
-# instead. The source repo BaseOS/AppStream rides along in the path, which also
-# makes the download below exact (no spec re-resolution, no version drift).
-awk -F/ '{print $NF}' "$ALMA_TMP/closure.urls" | sort -u > "$ALMA_TMP/wanted"
-find "$BASEOS_DEST" "$APPSTREAM_DEST" -maxdepth 1 -type f -name '*.rpm' -printf '%f\n' 2>/dev/null \
-    | sort -u > "$ALMA_TMP/present"
-comm -23 "$ALMA_TMP/wanted" "$ALMA_TMP/present" > "$ALMA_TMP/missing"
-comm -13 "$ALMA_TMP/wanted" "$ALMA_TMP/present" > "$ALMA_TMP/stale"
-
-# Prune rpms that are no part of the closure (e.g. an older kernel's
-# kernel-debug-*), so the served repos never carry orphans.
-while IFS= read -r f; do rm -f "$BASEOS_DEST/$f" "$APPSTREAM_DEST/$f"; done < "$ALMA_TMP/stale"
-
-if [ -s "$ALMA_TMP/missing" ]; then
-    # Download ONLY the missing rpms, straight into the canonical repo layout:
-    # the URL's path segment decides BaseOS vs AppStream.
-    while IFS= read -r url; do
-        fn="$(basename "$url")"
-        grep -Fxq "$fn" "$ALMA_TMP/missing" || continue
-        case "$url" in
-            */BaseOS/*) dest="$BASEOS_DEST" ;;
-            */AppStream/*) dest="$APPSTREAM_DEST" ;;
-            *) echo "[error] $url outside BaseOS/AppStream; refusing to mirror" >&2; exit 1 ;;
-        esac
-        retry_n 5 curl -fsSL -o "$dest/$fn" "$url"
-    done < "$ALMA_TMP/closure.urls"
-else
-    echo "[ok] Alma closure already fully mirrored; nothing to download"
-fi
-trap - EXIT
-rm -rf "$ALMA_TMP"
-createrepo_c --update "$BASEOS_DEST"
-createrepo_c --update "$APPSTREAM_DEST"
+echo "==[alma]== syncing full AlmaLinux repos ($ARCH, newest-only) to canonical layout ($ALMA_DEST)"
+# Every arch-specific Alma repo enabled on this VM (see templates/alma-repo/)
+# is synced in full under the canonical <releasever>/<RepoDir>/<arch>/os
+# layout. The source repos are the VM's own almalinux-*.repo files, which
+# repo.py has pointed at the NJU upstream mirror. --newest-only keeps just the
+# latest package versions so the first full sync stays small. Repodata is
+# regenerated locally with createrepo_c because upstream metadata would also
+# describe older versions absent from a newest-only file set.
+ALMA_REPO_IDS=({% for r, d in alma_repos.items() %} "{{ r }}"{% endfor %})
+ALMA_REPO_DIRS=({% for r, d in alma_repos.items() %} "{{ d }}"{% endfor %})
+for i in "${!ALMA_REPO_IDS[@]}"; do
+    repoid="${ALMA_REPO_IDS[$i]}"
+    dest="$ALMA_DEST/${ALMA_REPO_DIRS[$i]}/$ARCH/os"
+    mkdir -p "$dest"
+    migrate "$dest" "$repoid"
+    retry_n 5 dnf reposync "${DNFSETOPTS[@]}" --repoid="$repoid" --norepopath \
+        --arch "$ARCH" --newest-only --downloaddir="$dest"
+    trim_other_archs "$dest"
+    createrepo_c --update "$dest"
+done
 
 echo "==[keys]== serving GPG keys from the mirror"
 mkdir -p "$K8S_DEST/repodata"

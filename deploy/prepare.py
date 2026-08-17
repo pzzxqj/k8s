@@ -1,8 +1,8 @@
 """Prepare AlmaLinux 10 nodes for kubeadm with containerd + Cilium.
 
 Everything the nodes install comes from intranet sources only:
-  * AlmaLinux base packages (kernel-modules-extra, container-selinux, ...) ->
-    BaseOS/AppStream mirrored on the internal vm (deploy/repo.py), via the
+  * AlmaLinux base packages -> the full AlmaLinux 10 repo set (BaseOS, AppStream,
+    CRB, extras, ...) mirrored on the internal VM (deploy/repo.py), via the
     managed almalinux-*.repo templates pushed to each node (deploy/prepare.py)
   * k8s/containerd RPMs -> the same mirror, via kubernetes.repo + docker-ce.repo
   * container images + Cilium -> the offline bundle at /opt/k8s-offline, already
@@ -71,11 +71,12 @@ def _images_imported() -> bool:
 # 1. Fully managed Alma repo files: every /etc/yum.repos.d/almalinux*.repo is
 # pushed (not sed-edited) from the same vendored templates as cloud-init and
 # repo.py (see deploy/_alma_repos.py), pointed at the internal mirror. Nodes
-# use consumer="node", which enables only BaseOS/AppStream — the two repos the
-# internal mirror serves — and disables every other repo's primary section. Any
-# almalinux*.repo not covered by a template is removed (fully declared set).
-# `dnf clean all` runs only when a managed file differs from its rendered
-# template or a stray file is purged — on converged nodes this step is a noop.
+# use consumer="node", which (like the mirror) enables every arch-specific
+# repo — the internal mirror now serves all of them — so node resolution
+# matches a stock Alma install. Any almalinux*.repo not covered by a template
+# is removed (fully declared set). `dnf clean all` runs only when a managed
+# file differs from its rendered template or a stray file is purged — on
+# converged nodes this step is a noop.
 alma_mirror_prefix = f"{config.REPO_MIRROR_URL}/{config.ALMA_SERVED_PATH.split('/', 1)[0]}"
 tpl = _alma_repos.alma_repo_templates()
 # FindFiles returns absolute paths; compare basenames against the template set.

@@ -9,17 +9,16 @@ instead of being edited in place. Two variables vary per consumer:
   * ``enabled``:  whether each repo's primary section is enabled. This is a
     consumer decision (``consumer`` kwarg):
 
-    * ``consumer="mirror"`` (k8s-repo, the mirror VM, ``deploy/repo.py``)
-      reproduces the ORIGINAL stock enablement captured in the template — on
-      the AlmaLinux 10 cloud image every primary section ships ``enabled=1``,
-      so the result is all repos enabled against the NJU upstream. Note that
-      which repos get *synced/served* (BaseOS + AppStream only — this is a
-      learning lab that mirrors just what the cluster needs) is a separate
-      decision made by the mirror's repo-sync.sh via explicit
-      ``--disablerepo/* --enablerepo=baseos,appstream``, not by these files.
-    * ``consumer="node"`` (``deploy/prepare.py``, plus incus/incus_vms.py
-      cloud-init for k8s nodes) enables only BaseOS/AppStream, because the
-      node's baseurl points at the internal mirror which serves just those.
+  * ``consumer="mirror"`` (k8s-repo, the mirror VM, ``deploy/repo.py``)
+    reproduces the ORIGINAL stock enablement captured in the template — on
+    the AlmaLinux 10 cloud image every primary section ships ``enabled=1``,
+    so the result is all repos enabled against the NJU upstream. Every
+    arch-specific repo is then synced in full (x86_64, latest only) by the
+    mirror's repo-sync.sh and served under the canonical layout.
+  * ``consumer="node"`` (``deploy/prepare.py``, plus incus/incus_vms.py
+    cloud-init for k8s nodes) enables the SAME full set, but points it at the
+    internal mirror, which now serves all of those repos — so nodes resolve
+    their packages exactly as a stock Alma install would, just from intranet.
 
 Consumers:
   * deploy/repo.py        -> k8s-repo mirror VM, NJU upstream, mirror role
@@ -51,21 +50,17 @@ def alma_repo_templates() -> dict[str, Path]:
     }
 
 
-def _is_baseos_or_appstream(dest_filename: str) -> bool:
-    return "baseos" in dest_filename or "appstream" in dest_filename
-
-
 def alma_repo_enabled(dest_filename: str, *, consumer: str) -> int:
     """Whether a repo's primary section is enabled, per consumer role.
 
-    ``"mirror"`` reproduces the original stock.enabled state (all repos are
-    enabled on the AlmaLinux 10 cloud image); ``"node"`` enables only the
-    BaseOS/AppStream repos the internal mirror actually serves.
+    Both ``"mirror"`` and ``"node"`` enable every arch-specific repo: the
+    mirror reproduces the original stock.enabled state (all repos enabled on
+    the AlmaLinux 10 cloud image) so repo-sync.sh can sync them all, and the
+    nodes point the same full set at the internal mirror, which now serves all
+    of them.
     """
-    if consumer == "mirror":
+    if consumer in ("mirror", "node"):
         return 1
-    if consumer == "node":
-        return 1 if _is_baseos_or_appstream(dest_filename) else 0
     raise ValueError(f"unknown consumer: {consumer!r}")
 
 

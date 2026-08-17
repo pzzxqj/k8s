@@ -38,9 +38,9 @@ DEFAULT_PARALLEL = 4
 
 # The mirror VM's data lives on a persistent incus custom volume mounted at
 # /var/www/repos, so rebuilding k8s-repo does not re-download the mirror (the
-# repo-sync script is incremental for k8s/docker, and its Alma closure sync now
-# downloads only missing rpms). The volume is created/attached automatically
-# and is NOT deleted by --destroy (use --purge-repos-data to wipe it).
+# repo-sync script is incremental for k8s/docker and for every full Alma repo).
+# The volume is created/attached automatically and is NOT deleted by --destroy
+# (use --purge-repos-data to wipe it).
 REPOS_VOLUME = "k8s-repo-repos"
 REPOS_MOUNT_PATH = "/var/www/repos"
 
@@ -166,9 +166,10 @@ def user_data(name: str, settings: Settings) -> str:
     hosts_file = f"      127.0.0.1   localhost\n{hosts}"
     # Alma repos are fully managed: cloud-init writes the rendered templates
     # (see deploy/_alma_repos.py) at the NJU upstream. Role per VM: the mirror
-    # VM (k8s-repo) reproduces the stock enable-all state, k8s nodes enable
-    # only BaseOS/AppStream (internal mirror serves just those). deploy/repo.py
-    # and deploy/prepare.py later push the same render under their own role.
+    # VM (k8s-repo) reproduces the stock enable-all state, and k8s nodes enable
+    # the same full set (the internal mirror now serves every repo).
+    # deploy/repo.py and deploy/prepare.py later push the same render under
+    # their own role.
     consumer = "mirror" if name == config.REPO_MIRROR_HOSTNAME else "node"
     repo_files = "\n".join(
         f"  - path: /etc/yum.repos.d/{dest}\n"
