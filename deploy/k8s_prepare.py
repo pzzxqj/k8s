@@ -37,6 +37,9 @@ local.include("tasks/selinux.py")
 local.include("tasks/k8s_containerd.py")
 local.include("tasks/k8s_rpms.py")
 
+# HA control plane only: Keepalived VIP + HAProxy apiserver LB (no-op otherwise).
+local.include("tasks/k8s_lb.py")
+
 # Container images + runtime service.
 local.include("tasks/k8s_images.py")
 local.include("tasks/kubelet_service.py")

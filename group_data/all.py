@@ -15,3 +15,12 @@ repos = ["alma", "kubernetes", "docker-ce"]
 apiserver_port = "6443"
 service_subnet = "10.96.0.0/12"
 node_offline_dir = "/opt/k8s-offline"
+
+# HA control plane endpoint: set the Keepalived VIP per environment (e.g.
+# group_data/k8s_test.py). Only used when the control plane is HA (>1 master);
+# None keeps the classic single-master layout (endpoint = the bootstrap master's
+# ssh_hostname, no LB installed).
+control_plane_endpoint = None
+# Keepalived VRRP defaults (auth_pass is limited to 8 chars in PASS mode).
+vrrp_pass = "k8svrrp1"
+vrrp_cidr = "24"

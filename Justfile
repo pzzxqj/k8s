@@ -51,12 +51,26 @@ repos inventory="inventories/k8s_test.py":
 prepare: offline
     uv run pyinfra -y inventories/k8s_test.py deploy/k8s_prepare.py --limit nodes
 
-# Bootstrap the control plane on the master + install Cilium (offline chart).
+# Bootstrap the control plane on the first master + install Cilium (offline
+# chart). Additional control planes self-skip (deploy/k8s_init.py gates to the
+# bootstrap node via deploy/_topology.py).
 init: prepare
     uv run pyinfra -y inventories/k8s_test.py deploy/k8s_init.py --limit control_plane
 
+# Join additional control-plane nodes (HA only; single-master clusters skip).
+# Fetches the control-plane join command from the bootstrap master (only present
+# when the control plane is HA), then joins the other masters.
+join-cp: init
+    @if ssh -i {{ key }} -o StrictHostKeyChecking=accept-new {{ ssh_user }}@{{ master_ip }} \
+        'sudo test -f /etc/kubernetes/join-control-plane-command.txt' 2>/dev/null; then \
+        scp -i {{ key }} -o StrictHostKeyChecking=accept-new \
+            {{ ssh_user }}@{{ master_ip }}:/etc/kubernetes/join-control-plane-command.txt \
+            {{ offline_dir }}/join-control-plane-command.txt; \
+    fi
+    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_init_cp.py --limit control_plane
+
 # Fetch the join command from the master, then join the workers.
-join: init
+join: join-cp
     scp -i {{ key }} -o StrictHostKeyChecking=accept-new \
         {{ ssh_user }}@{{ master_ip }}:/etc/kubernetes/join-command.txt \
         {{ offline_dir }}/join-command.txt

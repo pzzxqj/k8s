@@ -17,3 +17,7 @@ docker_repo_base = config.DOCKER_UPSTREAM_BASE  # https://download.docker.com/li
 # (.../linux/centos/gpg); the mirror preserves that layout. Deriving it from the
 # repo base keeps the host consistent with whichever docker upstream is used.
 docker_gpg_key = f"{config.DOCKER_UPSTREAM_BASE.split('/10/', 1)[0]}/gpg"
+
+# HA control-plane endpoint: Keepalived VIP on incusbr0 (10.98.68.0/24).
+# Used only when the inventory declares >1 control-plane node.
+control_plane_endpoint = "10.98.68.20"

@@ -1,0 +1,27 @@
+global
+    maxconn 4096
+    log /dev/log local0
+    chroot /var/lib/haproxy
+    user haproxy
+    group haproxy
+    daemon
+
+defaults
+    mode tcp
+    log global
+    option tcplog
+    option dontlognull
+    retries 3
+    timeout connect 5s
+    timeout client 30s
+    timeout server 30s
+
+frontend k8s_api
+    bind {{ vip }}:{{ apiserver_port }}
+    default_backend k8s_masters
+
+backend k8s_masters
+    balance roundrobin
+{% for name, ip in control_plane_ips %}
+    server {{ name }} {{ ip }}:{{ apiserver_port }} check fall 3 rise 2
+{% endfor %}

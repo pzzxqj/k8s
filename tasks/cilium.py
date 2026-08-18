@@ -1,9 +1,13 @@
-"""Atomic task (control plane): install Cilium CLI + CNI from the offline chart.
+"""Atomic task (bootstrap control plane): install Cilium CLI + CNI from the offline chart.
 
 kubeProxyReplacement=true + k8sServiceHost/Port = full eBPF service LB with NO
 kube-proxy (kubeadm skipped its addon in tasks/kubeadm_init.py). useDigest=false:
 the chart pins image digests (@sha256:) but our offline bundle imports images by
 tag only, so containerd can't resolve digest refs offline -> ImagePullBackOff.
+
+The k8sServiceHost is the shared HA endpoint (Keepalived VIP when the control
+plane is HA, else this node's own IP), and the install runs only once from the
+bootstrap control plane.
 """
 
 import sys
@@ -16,8 +20,10 @@ from pyinfra.facts.server import Command
 from pyinfra.operations import files, server
 
 import config
+from deploy import _topology
 
 offline_dir = host.data.get("node_offline_dir", config.NODE_OFFLINE_DIR)
+topo = _topology.topology()
 
 
 def cilium_cli_current() -> bool:
@@ -42,13 +48,17 @@ def cilium_installed() -> bool:
     ).strip() == "yes"
 
 
+def bootstrap_node() -> bool:
+    return topo.is_bootstrap(host.name)
+
+
 files.copy(
     name=f"[{host.name}] Install Cilium CLI to /usr/local/bin",
     src=f"{offline_dir}/cilium/cilium",
     dest="/usr/local/bin/",
     overwrite=True,
     _sudo=True,
-    _if=lambda: not cilium_cli_current(),
+    _if=lambda: bootstrap_node() and not cilium_cli_current(),
 )
 
 server.shell(
@@ -58,7 +68,7 @@ server.shell(
             "cilium install "
             f"--chart-directory {offline_dir}/cilium/chart "
             "--set kubeProxyReplacement=true "
-            f"--set k8sServiceHost={host.data.ssh_hostname} "
+            f"--set k8sServiceHost={topo.endpoint_ip} "
             f"--set k8sServicePort={host.data.apiserver_port} "
             "--set nodePort.enabled=true "
             "--set hostPort.enabled=true "
@@ -69,5 +79,5 @@ server.shell(
             "--set envoy.image.useDigest=false"
         ),
     ],
-    _if=lambda: not cilium_installed(),
+    _if=lambda: bootstrap_node() and not cilium_installed(),
 )

@@ -32,6 +32,11 @@ NODE_OFFLINE_DIR = "/opt/k8s-offline"
 SSH_USER = "admin"
 
 # ---------- topology ----------
+# Bootstrap (first) control-plane node; additional masters / workers are listed
+# in the VM specs below and in inventories/k8s_test.py. The HA control plane is
+# decided by the inventory's control_plane group (first entry bootstraps,
+# rest join via `just join-cp`); the shared endpoint is the Keepalived VIP from
+# group_data (control_plane_endpoint).
 MASTER_HOSTNAME = "k8s-master"
 MASTER_IP = "10.98.68.10"
 # kube-apiserver secure port (kubeadm default 6443). Passed to Cilium as
@@ -39,11 +44,16 @@ MASTER_IP = "10.98.68.10"
 APISERVER_PORT = "6443"
 # Pod-network-agnostic service subnet; kubeadm networking.serviceSubnet.
 SERVICE_SUBNET = "10.96.0.0/12"
-WORKER_IPS = ["10.98.68.11", "10.98.68.12"]
+WORKER_IPS = ["10.98.68.11", "10.98.68.12", "10.98.68.16"]
 
-# VM specs keyed by Incus instance name (used by incus/incus_vms.py)
+# VM specs keyed by Incus instance name (used by incus/incus_vms.py). This is
+# VM provisioning only — the k8s deployment shape is decided solely by
+# inventories/k8s_test.py (keep IPs in sync).
 VMS = {
     "k8s-master": {"vcpu": 4, "memory": "6GiB", "disk": "20GiB", "ip": MASTER_IP},
+    "k8s-master-2": {"vcpu": 4, "memory": "6GiB", "disk": "20GiB", "ip": "10.98.68.14"},
+    "k8s-master-3": {"vcpu": 4, "memory": "6GiB", "disk": "20GiB", "ip": "10.98.68.15"},
     "k8s-worker-1": {"vcpu": 4, "memory": "3GiB", "disk": "20GiB", "ip": WORKER_IPS[0]},
     "k8s-worker-2": {"vcpu": 4, "memory": "3GiB", "disk": "20GiB", "ip": WORKER_IPS[1]},
+    "k8s-worker-3": {"vcpu": 4, "memory": "3GiB", "disk": "20GiB", "ip": WORKER_IPS[2]},
 }

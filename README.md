@@ -65,6 +65,7 @@ ssh k8s-master1 'sudo dnf repolist'   # 应出现 kubernetes / docker-ce / almal
 ```bash
 uv run pyinfra -y inventories/k8s_production.py deploy/k8s_prepare.py
 uv run pyinfra -y inventories/k8s_production.py deploy/k8s_init.py --limit control_plane
+uv run pyinfra -y inventories/k8s_production.py deploy/k8s_init_cp.py --limit control_plane   # HA（多 master）时
 uv run pyinfra -y inventories/k8s_production.py deploy/k8s_join.py --limit workers
 ```
 
@@ -74,17 +75,22 @@ uv run pyinfra -y inventories/k8s_production.py deploy/k8s_join.py --limit worke
 
 ## 测试环境（Incus 实验集群，10.98.68.x）
 
-用 **kubeadm + containerd + Cilium** 在 Incus 的 3 台 AlmaLinux 10 VM 上部署测试用 Kubernetes v1.36 集群。RPM 全部**直连上游**下载（无内网镜像），容器镜像与 Cilium 走**离线包**（宿主机下载 → 上传到节点）。
+用 **kubeadm + containerd + Cilium** 在 Incus 的 AlmaLinux 10 VM 上部署测试用 Kubernetes v1.36 集群。集群形状（多少控制面/多少 worker）**完全由 inventory 决定**，脚本自动推导：控制面 >1 时自动启用 **HA 控制面**（Keepalived VIP + HAProxy 负载均衡，跑在 master 上），单控制面则退回经典单 master 布局。RPM 全部**直连上游**下载（无内网镜像），容器镜像与 Cilium 走**离线包**（宿主机下载 → 上传到节点）。
 
 ### 拓扑
 
 | 节点 | IP | 内存 | 角色 |
 |---|---|---|---|
-| k8s-master | 10.98.68.10 | 6GiB | control-plane + Cilium |
+| k8s-master | 10.98.68.10 | 6GiB | control-plane（bootstrap）+ Keepalived/HAProxy + Cilium |
+| k8s-master-2 | 10.98.68.14 | 6GiB | control-plane + Keepalived/HAProxy |
+| k8s-master-3 | 10.98.68.15 | 6GiB | control-plane + Keepalived/HAProxy |
 | k8s-worker-1 | 10.98.68.11 | 3GiB | worker |
 | k8s-worker-2 | 10.98.68.12 | 3GiB | worker |
+| k8s-worker-3 | 10.98.68.16 | 3GiB | worker |
 
-单点修改处：`config.py`（拓扑、目录、VM 规格）；Cilium chart/CLI 版本固定在 `scripts/k8s_download_offline.py`；k8s 版本跟随**宿主机本地 kubeadm**（`kubeadm config images list`，须与 pkgs.k8s.io 上游 RPM 同版本）。
+- **HA 控制面端点**：Keepalived VIP `10.98.68.20:6443`（`group_data/k8s_test.py` 的 `control_plane_endpoint`），HAProxy 在每个 master 上把 VIP 转发到全部 apiserver；kubeadm `controlPlaneEndpoint` 与 Cilium `k8sServiceHost` 都用 VIP。apiserver 以 `bind-address` 绑本机 IP，与 HAProxy 互不冲突。
+- **自动决策**：`deploy/_topology.py` 自定位 inventory（`host.groups` 的 `k8s_test` 自动组），`control_plane` 列表第一条 = bootstrap master、长度 >1 = HA、keepalived 优先级/HAProxy 后端由列表推导。清单加行即扩容，无需任何标志位。
+- 单点修改处：`config.py`（VM 规格，仅建机用）与 `inventories/k8s_test.py`（部署拓扑，唯一决策来源，IP 需与 config 一致）；Cilium chart/CLI 版本固定在 `scripts/k8s_download_offline.py`；k8s 版本跟随**宿主机本地 kubeadm**（`kubeadm config images list`，须与 pkgs.k8s.io 上游 RPM 同版本）。
 
 ### 组件来源
 
@@ -93,6 +99,7 @@ uv run pyinfra -y inventories/k8s_production.py deploy/k8s_join.py --limit worke
 - **容器镜像 + Cilium CLI/chart** → 离线包 `./offline`（images/ 预载到 containerd；`k8s_download_offline.py` 用 rsync 直接推到各节点 `/opt/k8s-offline`，不经 pyinfra）
 - **系统基础包** → 直连上游 NJU `almalinux/10/<RepoDir>/x86_64/os/` 规范布局（见 `config.ALMA_UPSTREAM_BASE`）：**全部 9 个仓库**（BaseOS/AppStream/CRB/extras/HighAvailability/NFV/RT/SAP/SAPHANA）。节点的 `almalinux-*.repo` **就地编辑**（`tasks/alma_repos.py`：注释 `mirrorlist`、baseurl 重指 NJU 且保留 URL 尾路径，注释过的 baseurl 一并启用），不再用 VM 模板整套下发；cloud-init（`incus/incus_vms.py`）建机时同样用 sed 先指向 NJU，保证首装 `dnf` 不出内网。`tasks/kubernetes_repo.py`/`tasks/docker_ce_repo.py` 是受管文件（`templates/`），baseurl 指向 pkgs.k8s.io / download.docker.com（gpgkey 分别取 `repodata/repomd.xml.key` 与 `linux/centos/gpg`）
 - **kube-proxy** → 不使用，由 **Cilium eBPF 完全替代**（kube-proxy free）。`kubeadm init` 加 `--skip-phases=addon/kube-proxy`，Cilium 以 `kubeProxyReplacement=true` + `k8sServiceHost/-Port` 安装（见 `deploy/k8s_init.py`），ClusterIP/NodePort/HostPort/masquerade 全走 eBPF，节点上不落任何 service 级 netfilter 规则。历史教训：曾先后尝试 kube-proxy 原生 nftables 模式（kubeadm v1beta4 `kubeProxy.config.mode: nftables`）与改 kube-proxy ConfigMap `mode: nftables`，实测均因 kube-proxy 的 nft 表与 Cilium netfilter 规则冲突导致 3 节点出站黑洞（`sudo nft delete table ip kube-proxy` 即恢复），故彻底去掉 kube-proxy 而非在其上纠缠模式。节点仍装 `iptables-nft` + `nftables`（满足 kubelet 内核依赖、提供 `nft` CLI 排查）
+- **HA 控制面 LB** → 仅在 control_plane 组多于 1 台时安装：`haproxy` + `keepalived`（`tasks/k8s_lb.py`，Alma 上游源）。Keepalived VRRP（unicast，优先级按清单顺序 200/150/100）持有 VIP，`notify_master/backup` 脚本只在 VIP 持有者上启停 HAProxy，避免与同机 apiserver 抢 `:6443`。apiserver 侧由 kubeadm 配置 `bind-address` 绑本机 IP（`templates/kubeadm.yaml.j2`）
 
 ### 目录结构
 
@@ -113,9 +120,11 @@ mirror/                  # 内网 RPM 镜像站（生产环境，独立于 k8s�
   templates/             #   镜像机 unit×6 + repos.conf.j2
 deploy/                  # pyinfra 编排脚本（环境无关，靠 inventory/group data 区分）
   _common.py             #   共享 helper（is_control_plane / ssh_user / safe_file_exists / 远程路径常量）
+  _topology.py           #   从 inventory 自动推导拓扑（bootstrap/HA/endpoint/keepalived 优先级/haproxy 后端）
   repos.py               #   仅换 dnf 源（alma 就地编辑 + kubernetes/docker-ce 受管文件）
-  k8s_prepare.py         #   所有节点：repo→内核/swap/selinux→containerd/k8s RPM→镜像预载
-  k8s_init.py            #   control_plane：kubeadm init + Cilium 离线安装 + join 命令
+  k8s_prepare.py         #   所有节点：repo→内核/swap/selinux→containerd/k8s RPM→镜像预载→(HA) LB
+  k8s_init.py            #   bootstrap control_plane：kubeadm init + Cilium 离线安装 + join 命令
+  k8s_init_cp.py         #   (HA) 附加 control_plane：kubeadm join --control-plane
   k8s_join.py            #   workers：kubeadm join
 tasks/                   # 原子任务（被 deploy/*.py local.include）
   alma_repos.py          #   almalinux-*.repo 就地编辑（注释 mirrorlist，baseurl 重指 alma_base）
@@ -123,24 +132,28 @@ tasks/                   # 原子任务（被 deploy/*.py local.include）
   docker_ce_repo.py      #   受管 docker-ce.repo（按 repos 子集 push/remove）
   kernel_modules_extra.py / kernel_modules.py / sysctl.py / swap.py / selinux.py
   k8s_containerd.py / k8s_rpms.py / k8s_images.py / kubelet_service.py
-  kubeadm_init.py / kubeconfig.py / cilium.py / k8s_join_command.py / k8s_worker_join.py
+  kubeadm_init.py / kubeconfig.py / cilium.py / k8s_join_command.py
+  k8s_worker_join.py / k8s_control_plane_join.py / k8s_lb.py
 incus/
   incus_vms.py           # 创建/销毁 VM（原生 Python + 线程池并行，不依赖 pyinfra）
   _incus.py              #   共享 incus CLI 封装（run / instance_exists / instance_running）
 templates/               # 远程配置文件 jinja2 模板
   kubernetes.repo.j2     #   节点端 k8s dnf 源（pkgs.k8s.io 上游 / 镜像站）
   docker-ce.repo.j2      #   节点端 containerd dnf 源（download.docker.com 上游 / 镜像站）
-  kubeadm.yaml.j2        #   kubeadm init 配置（advertiseAddress/controlPlaneEndpoint = ssh_hostname）
+  kubeadm.yaml.j2        #   kubeadm init 配置（advertiseAddress=本机，controlPlaneEndpoint=VIP/单点，HA 时 bind-address）
+  haproxy.cfg.j2         #   HAProxy：VIP:apiserver_port → 全部 master apiserver（HA 时渲染）
+  keepalived.conf.j2     #   Keepalived VRRP：VIP/unicast/优先级/notify（HA 时渲染）
   containerd-config.toml.j2
 scripts/
   k8s_download_offline.py  # 宿主机下载离线包（kubeadm config images list + Cilium）并 rsync 到节点
                            #   --inventory / --group 决定上传目标（默认 k8s_test）
   k8s_import_images.sh   # 节点端镜像导入助手（随包上传到 /opt/k8s-offline/）
+  k8s_lb_master.sh       # keepalived notify：start/stop haproxy（VIP 持有者切换时）
   k8s_verify_cluster.py  # 集群验证（官方 kubernetes client，见「验证」）
 offline/                 # 生成的离线包（已 gitignore）
 ```
 
-Justfile recipe 即一键编排链：`all: verify -> join -> init -> prepare -> offline`。
+Justfile recipe 即一键编排链：`all: verify -> join -> join-cp -> init -> prepare -> offline`（单 master 时 `join-cp` 自动跳过）。
 
 ### 快速开始
 
@@ -153,7 +166,8 @@ just vm-create   # 并行创建全部 VM（脚本内部线程池）；子集：j
 #    k8s/containerd RPM 由上游源提供，不在 bundle 中）。
 just offline
 
-# 3. 一键部署全流程：offline → prepare → init(master) → join(workers) → verify
+# 3. 一键部署全流程：offline → prepare → init(bootstrap master) → join-cp(HA 附加
+#    master，单 master 自动跳过) → join(workers) → verify
 just all
 ```
 
@@ -162,13 +176,16 @@ just all
 ```bash
 just offline     # 构建并上传离线包（版本校验直查 pkgs.k8s.io，无 dnf 时降级跳过）
 just repos       # 仅换 dnf 源（默认 k8s_test；REPO_INVENTORY 参数，如 just repos inventories/k8s_production.py）
-just prepare     # 所有节点准备（依赖 offline）
-just init        # master 初始化（依赖 prepare）
-just join        # 拉取 join 命令并加入 workers（依赖 init）
+just prepare     # 所有节点准备（依赖 offline；HA 时顺带装 keepalived/haproxy 并拉起 VIP）
+just init        # bootstrap master 初始化 + Cilium（依赖 prepare；附加 master 自跳过）
+just join-cp     # (HA) 附加 master 加入控制面（依赖 init；单 master 自跳过）
+just join        # 拉取 join 命令并加入 workers（依赖 join-cp）
 just verify      # 集群验证（依赖 join）
 ```
 
-生产环境复用同一套 recipe，仅 inventory 不同：`just offline --inventory inventories/k8s_production.py`、`uv run pyinfra -y inventories/k8s_production.py deploy/{repos,k8s_prepare,k8s_init,k8s_join}.py`（见「生产环境」一节）。
+**扩容即加行**：新增 worker → 在 `config.py` 的 `VMS` 与 `inventories/k8s_test.py` 的 `workers` 组各加一行（IP 一致），重跑 `just vm-create <名字>` + `just prepare` + `just join`。新增 master → 同样加进 `VMS` 与 `control_plane` 组，`just vm-create` + `just prepare` + `just join-cp`。bootstrap/HA/endpoint/优先级全部由 `deploy/_topology.py` 从清单自动推导，无需改脚本。
+
+生产环境复用同一套 recipe，仅 inventory 不同：`just offline --inventory inventories/k8s_production.py`、`uv run pyinfra -y inventories/k8s_production.py deploy/{repos,k8s_prepare,k8s_init,k8s_init_cp,k8s_join}.py`（见「生产环境」一节）。生产若启用 HA，同样先在 `group_data/k8s_production.py` 的 `control_plane_endpoint` 填一个空闲 VIP，再把附加 master 加进 `control_plane` 组。
 
 ### 验证
 
@@ -227,4 +244,5 @@ kubectl -n kube-system delete pod/testdns cm/testdns-cfg
 - **离线拉取镜像失败**：镜像 tag 与 kubeadm/Cilium chart 不一致。镜像清单来自宿主机本地 `kubeadm config images list`（若 pkgs.k8s.io 上游升级了 patch，需同步升级宿主机 kubeadm）与固定 Cilium 清单（见 `scripts/k8s_download_offline.py`），重新跑 `uv run python scripts/k8s_download_offline.py` 会重新生成 `offline/images/import-plan.txt`。
 - **版本校验报错**（`宿主机 kubeadm 版本 (X) 与 pkgs.k8s.io 当前 kubelet (Y) 不一致`）：上游已更新到新的 patch 而宿主机 kubeadm 未同步。先 `dnf --disablerepo='*' --repofrompath=pkgs,https://pkgs.k8s.io/core:/stable:/v1.36/rpm -q repoquery --latest-limit 1 --qf '%{VERSION}' kubelet` 查上游当前版本，把宿主机 kubeadm 升级到同版本再跑；确需强行构建可用 `--skip-version-check`。
 - **版本校验跳过**：`k8s_download_offline.py` 依赖宿主机 `dnf` 解析 pkgs.k8s.io；宿主机无 dnf（或无法访问 pkgs.k8s.io）时自动降级为仅提示，不报错退出——加 `--skip-version-check` 可显式忽略。
+- **把已部署的单 master 集群扩成 HA 3 master**：kubeadm 官方支持对已有集群追加 control-plane。步骤：1) 清单 `control_plane` 组追加 master-2/3、`config.py` `VMS` 建对应 VM；2) `just vm-create` + `just prepare`（会在各 master 装 keepalived/haproxy 并拉起 VIP，也覆盖现 master）；3) `just init` 因 admin.conf 已存在会跳过 init、仅收敛其它任务；4) `just join-cp` 拉取 `kubeadm init phase upload-certs --upload-certs` 生成的证书 key 后把 master-2/3 以 `--control-plane` 加入；5) `just join` 加 worker。注意：现有 kubeconfig/客户端仍指向旧 master IP，需自行切到 VIP（`kubectl config set-cluster ...` 或重新下发 admin.conf）。
 - **幂等**：所有 recipe 可重复执行；`just all` 重跑全为 No-change/跳过，且不重启运行中的 kubelet。`tasks/alma_repos.py` 跳过与 `alma_base` 相同的已知上游（测试环境即 NJU），避免 baseurl 自匹配反复改写、连带每次触发 `dnf clean all`。

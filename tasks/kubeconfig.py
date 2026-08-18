@@ -40,5 +40,8 @@ server.shell(
         ),
     ],
     _sudo=True,
-    _if=lambda: not admin_kubeconfig_current(),
+    # admin.conf only exists after kubeadm init / join --control-plane, so skip
+    # hosts that have not joined yet (e.g. additional masters during `just init`).
+    _if=lambda: _common.safe_file_exists(_common.ADMIN_CONF)
+    and not admin_kubeconfig_current(),
 )

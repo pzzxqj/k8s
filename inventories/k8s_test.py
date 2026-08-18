@@ -19,6 +19,22 @@ control_plane = [
             "repos": ["alma", "kubernetes", "docker-ce"],
         },
     ),
+    (
+        "k8s-master-2",
+        {
+            "ssh_hostname": "10.98.68.14",
+            "ssh_user": "admin",
+            "repos": ["alma", "kubernetes", "docker-ce"],
+        },
+    ),
+    (
+        "k8s-master-3",
+        {
+            "ssh_hostname": "10.98.68.15",
+            "ssh_user": "admin",
+            "repos": ["alma", "kubernetes", "docker-ce"],
+        },
+    ),
 ]
 
 workers = [
@@ -34,6 +50,14 @@ workers = [
         "k8s-worker-2",
         {
             "ssh_hostname": "10.98.68.12",
+            "ssh_user": "admin",
+            "repos": ["alma", "kubernetes", "docker-ce"],
+        },
+    ),
+    (
+        "k8s-worker-3",
+        {
+            "ssh_hostname": "10.98.68.16",
             "ssh_user": "admin",
             "repos": ["alma", "kubernetes", "docker-ce"],
         },
