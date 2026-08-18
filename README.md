@@ -5,6 +5,15 @@
 1. **生产环境（192.168.90.x）**：当前在用的内网集群（k8s-master1/worker1/worker2）与镜像站 `192.168.90.201`，后者全量镜像 AlmaLinux 10 + docker-ce + kubernetes，走三套 systemd 定时同步。镜像站的部署脚本/配置独立在 `mirror/`（与 k8s 分离）。节点 dnf 源全部指向镜像站。
 2. **测试环境（Incus 实验集群，10.98.68.x）**：在 Incus 的 3 台 AlmaLinux 10 VM 上用 kubeadm + containerd + Cilium 部署测试用 Kubernetes v1.36，无内网镜像——「内网镜像」就是上游（pkgs.k8s.io / download.docker.com / NJU）；容器镜像与 Cilium 走离线包。
 
+## 版本
+
+脚本版本单一来源 `pyproject.toml`（`project.version`），用 git tag（`v0.x.y`）发布。0.x 阶段的递增策略：
+
+- **`0.minor`**：破坏性变更或新能力——`inventories/group_data` 键变化、recipe/命令面变化（如 rename、加 join-cp）、新拓扑模式（如 HA）。判定标准：**重新部署者需要知道这次改动**。
+- **`patch`**：纯修复或行为不变的重构（如幂等修复）。
+
+离线包构建时（`scripts/k8s_download_offline.py`）把生成时的版本与 commit 写入 `offline/deploy-version.txt`，随包 rsync 到每节点 `/opt/k8s-offline/`；`cat /opt/k8s-offline/deploy-version.txt` 即知该集群部署所用脚本版本。
+
 ---
 
 ## 生产环境（192.168.90.x）

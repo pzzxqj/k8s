@@ -34,6 +34,7 @@ ssh_hostname/ssh_user), so the k8s test and production clusters work identically
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -370,6 +371,42 @@ def write_manifest(offline_dir: Path) -> None:
             fh.write(f"{digest}  ./{p.relative_to(offline_dir)}\n")
 
 
+def project_version() -> str:
+    """Version from pyproject.toml (single source of truth), or 'unknown'."""
+    try:
+        import tomllib
+
+        with (REPO_ROOT / "pyproject.toml").open("rb") as fh:
+            return str(tomllib.load(fh)["project"]["version"])
+    except (OSError, KeyError, ValueError):
+        return "unknown"
+
+
+def git_commit() -> str:
+    """Short HEAD commit of the repo that built this bundle, or 'unknown'."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--short", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return proc.stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def write_deploy_version(offline_dir: Path) -> None:
+    """Record the script version + commit that produced the bundle.
+
+    Rsynced to every node (offline/deploy-version.txt) for deployment provenance.
+    """
+    built = datetime.datetime.now().astimezone().date().isoformat()
+    (offline_dir / "deploy-version.txt").write_text(
+        f"{project_version()} @ {git_commit()} ({built})\n"
+    )
+
+
 def rsync_args(settings: Settings) -> list[str]:
     return [
         "rsync",
@@ -411,6 +448,7 @@ def main() -> int:
         download_cilium_artifacts(settings, client)
 
     write_image_plan(settings, k8s_imgs)
+    write_deploy_version(settings.offline_dir)
     write_manifest(settings.offline_dir)
 
     du = subprocess.run(

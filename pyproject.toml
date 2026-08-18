@@ -1,6 +1,6 @@
 [project]
 name = "k8s"
-version = "0.1.0"
+version = "0.4.0"
 description = "Offline k8s lab (AlmaLinux 10 + containerd + Cilium) on Incus VMs"
 readme = "README.md"
 authors = [
