@@ -115,9 +115,8 @@ def transform(raw: str) -> str:
     header = (
         "# Managed AlmaLinux repo file. Captured from a fresh AlmaLinux 10 cloud VM;\n"
         "# regenerate with scripts/snapshot_alma_repos.py. alma_base/enabled are the\n"
-        "# only free variables: enabled=1 reproduces the stock enablement; both the\n"
-        "# mirror (k8s-repo) and the k8s nodes enable the full repo set (see\n"
-        "# deploy/_alma_repos.py).\n"
+        "# only free variables: enabled=1 reproduces the stock enablement; the k8s\n"
+        "# nodes enable the full repo set (see deploy/_alma_repos.py).\n"
     )
     return header + "\n".join(out) + "\n"
 

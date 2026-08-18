@@ -1,0 +1,11 @@
+[Unit]
+Description=Sync AlmaLinux 10 rpm mirror from NJU (lftp over HTTPS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/alma-repo-sync.sh
+
+[Install]
+WantedBy=multi-user.target

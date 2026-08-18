@@ -1,11 +1,11 @@
 [Unit]
-Description=Sync internal RPM mirror repos
+Description=Sync Kubernetes rpm repos (pkgs.k8s.io) with dnf reposync
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/repo-sync.sh
+ExecStart=/usr/local/bin/kubernetes-repo-sync.sh
 
 [Install]
 WantedBy=multi-user.target

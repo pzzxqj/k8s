@@ -26,7 +26,7 @@ description: pyinfra 部署脚本参考技能。本项目用 pyinfra 管理 Incu
 ## 本项目约定（k8s 内网集群）
 
 - 入口统一为 `uv run pyinfra -y inventory.py deploy/<X>.py --limit <group> --user admin`（可加 `--key ~/.ssh/id_ed25519`），见各 `deploy/*.py` 头部注释。所有脚本幂等，重跑应整体 No-change。
-- 分组：`k8s_repo` / `k8s_master` / `k8s_workers` / `k8s_nodes`，取自 `inventory.py`。
+- 分组：`k8s_master` / `k8s_workers` / `k8s_nodes`，取自 `inventory.py`。镜像站不在此列——真实镜像站由 `mirror/repo.py` 直接主机连接运行（`uv run pyinfra -y 192.168.90.201 mirror/repo.py --user zhch`；实名认证走 ssh-agent/ssh_config，不传 `--key`）。
 - import 风格：
   - 上下文：`from pyinfra.context import host`
   - 事实：`from pyinfra.facts.<mod> import <Fact>`（如 `FileContents`、`FindFiles`、`FindInFile`、`Command`、`Selinux`）

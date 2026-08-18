@@ -1,6 +1,6 @@
 """Vendored AlmaLinux repo templates: single source of truth.
 
-The ``almalinux*.repo`` files on every lab host are fully managed: they are
+The ``almalinux*.repo`` files on every lab node are fully managed: they are
 pushed from pre-rendered templates under ``templates/alma-repo/`` (captured
 from a fresh AlmaLinux 10 cloud VM, see ``scripts/snapshot_alma_repos.py``)
 instead of being edited in place. Two variables vary per consumer:
@@ -9,22 +9,15 @@ instead of being edited in place. Two variables vary per consumer:
   * ``enabled``:  whether each repo's primary section is enabled. This is a
     consumer decision (``consumer`` kwarg):
 
-  * ``consumer="mirror"`` (k8s-repo, the mirror VM, ``deploy/repo.py``)
-    reproduces the ORIGINAL stock enablement captured in the template — on
-    the AlmaLinux 10 cloud image every primary section ships ``enabled=1``,
-    so the result is all repos enabled against the NJU upstream. Every
-    arch-specific repo is then synced in full (x86_64, latest only) by the
-    mirror's repo-sync.sh and served under the canonical layout.
   * ``consumer="node"`` (``deploy/prepare.py``, plus incus/incus_vms.py
-    cloud-init for k8s nodes) enables the SAME full set, but points it at the
-    internal mirror, which now serves all of those repos — so nodes resolve
-    their packages exactly as a stock Alma install would, just from intranet.
+    cloud-init for k8s nodes) enables the SAME full set — the AlmaLinux 10
+    cloud image ships ``enabled=1`` for every primary section — and points it
+    at the NJU upstream, so nodes resolve their packages exactly as a stock
+    Alma install would, straight from the internet.
 
 Consumers:
-  * deploy/repo.py        -> k8s-repo mirror VM, NJU upstream, mirror role
-  * deploy/prepare.py     -> k8s nodes, internal mirror, node role
-  * incus/incus_vms.py    -> cloud-init first boot, NJU upstream, role picked
-                             per VM name
+  * deploy/prepare.py     -> k8s nodes, NJU upstream, node role
+  * incus/incus_vms.py    -> cloud-init first boot, NJU upstream, node role
 """
 
 import sys
@@ -53,13 +46,11 @@ def alma_repo_templates() -> dict[str, Path]:
 def alma_repo_enabled(dest_filename: str, *, consumer: str) -> int:
     """Whether a repo's primary section is enabled, per consumer role.
 
-    Both ``"mirror"`` and ``"node"`` enable every arch-specific repo: the
-    mirror reproduces the original stock.enabled state (all repos enabled on
-    the AlmaLinux 10 cloud image) so repo-sync.sh can sync them all, and the
-    nodes point the same full set at the internal mirror, which now serves all
-    of them.
+    ``"node"`` enables every arch-specific repo: this reproduces the stock
+    enablement of the AlmaLinux 10 cloud image (all repos enabled), and the
+    nodes point that full set at the NJU upstream, which serves all of them.
     """
-    if consumer in ("mirror", "node"):
+    if consumer == "node":
         return 1
     raise ValueError(f"unknown consumer: {consumer!r}")
 
@@ -76,8 +67,8 @@ def render_alma_repo(template: Path, dest_filename: str, alma_base: str, *, cons
 def alma_repo_consistent(dest: str, src: Path, alma_base: str, *, consumer: str) -> bool:
     """True when the installed /etc/yum.repos.d/<dest> matches its render.
 
-    Used by deploy/repo.py and deploy/prepare.py to decide whether a `dnf clean
-    all` is needed. Only ever called during a pyinfra deploy, so the pyinfra
+    Used by deploy/prepare.py to decide whether a `dnf clean all` is needed.
+    Only ever called during a pyinfra deploy, so the pyinfra
     imports stay function-local (this module is also imported by non-pyinfra
     tooling: incus/incus_vms.py, scripts/snapshot_alma_repos.py).
     """

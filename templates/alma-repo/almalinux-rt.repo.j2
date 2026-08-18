@@ -1,8 +1,7 @@
 # Managed AlmaLinux repo file. Captured from a fresh AlmaLinux 10 cloud VM;
 # regenerate with scripts/snapshot_alma_repos.py. alma_base/enabled are the
-# only free variables: enabled=1 reproduces the stock enablement; both the
-# mirror (k8s-repo) and the k8s nodes enable the full repo set (see
-# deploy/_alma_repos.py).
+# only free variables: enabled=1 reproduces the stock enablement; the k8s
+# nodes enable the full repo set (see deploy/_alma_repos.py).
 [rt]
 name=AlmaLinux $releasever - RT
 # mirrorlist=https://mirrors.almalinux.org/mirrorlist/$releasever/rt

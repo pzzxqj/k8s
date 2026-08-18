@@ -1,7 +1,7 @@
 [docker-ce]
-name=Docker CE stable (internal mirror)
-baseurl={{ mirror_url }}/{{ docker_repo_path }}/
+name=Docker CE stable (upstream)
+baseurl={{ repo_base }}/
 enabled=1
 gpgcheck=1
 repo_gpgcheck=0
-gpgkey={{ mirror_url }}/{{ docker_repo_path }}/gpg
+gpgkey={{ repo_base }}/gpg

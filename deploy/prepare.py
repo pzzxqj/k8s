@@ -1,15 +1,13 @@
 """Prepare AlmaLinux 10 nodes for kubeadm with containerd + Cilium.
 
-Everything the nodes install comes from intranet sources only:
-  * AlmaLinux base packages -> the full AlmaLinux 10 repo set (BaseOS, AppStream,
-    CRB, extras, ...) mirrored on the internal VM (deploy/repo.py), via the
-    managed almalinux-*.repo templates pushed to each node (deploy/prepare.py)
-  * k8s/containerd RPMs -> the same mirror, via kubernetes.repo + docker-ce.repo
+Everything the nodes install comes from two places:
+  * RPMs -> ALWAYS from upstream repos directly: AlmaLinux base packages from
+    the NJU mirror (managed almalinux-*.repo templates, deploy/_alma_repos.py),
+    k8s/containerd RPMs from pkgs.k8s.io / download.docker.com
   * container images + Cilium -> the offline bundle at /opt/k8s-offline, already
     pushed there by scripts/download_offline.py (rsync, no pyinfra).
 
 Workflow:
-    uv run pyinfra -y inventory.py deploy/repo.py --limit k8s_repo --user admin
     uv run python scripts/download_offline.py            # build ./offline + rsync to nodes
     uv run pyinfra -y inventory.py deploy/prepare.py --user admin --key ~/.ssh/id_ed25519
 
@@ -69,15 +67,14 @@ def _images_imported() -> bool:
 # required by files.put / dnf.repo.
 
 # 1. Fully managed Alma repo files: every /etc/yum.repos.d/almalinux*.repo is
-# pushed (not sed-edited) from the same vendored templates as cloud-init and
-# repo.py (see deploy/_alma_repos.py), pointed at the internal mirror. Nodes
-# use consumer="node", which (like the mirror) enables every arch-specific
-# repo — the internal mirror now serves all of them — so node resolution
-# matches a stock Alma install. Any almalinux*.repo not covered by a template
-# is removed (fully declared set). `dnf clean all` runs only when a managed
-# file differs from its rendered template or a stray file is purged — on
-# converged nodes this step is a noop.
-alma_mirror_prefix = f"{config.REPO_MIRROR_URL}/{config.ALMA_SERVED_PATH.split('/', 1)[0]}"
+# pushed (not sed-edited) from the same vendored templates as cloud-init (see
+# deploy/_alma_repos.py), pointed at the NJU upstream. Nodes use
+# consumer="node", which enables every arch-specific repo (NJU serves them
+# all), so node resolution matches a stock Alma install. Any almalinux*.repo
+# not covered by a template is removed (fully declared set). `dnf clean all`
+# runs only when a managed file differs from its rendered template or a stray
+# file is purged — on converged nodes this step is a noop.
+alma_mirror_prefix = config.ALMA_UPSTREAM_BASE
 tpl = _alma_repos.alma_repo_templates()
 # FindFiles returns absolute paths; compare basenames against the template set.
 remote = {
@@ -92,7 +89,7 @@ need_clean = any(
 
 for dest, src in sorted(tpl.items()):
     files.template(
-        name=f"Point {dest} at the internal mirror",
+        name=f"Point {dest} at the NJU upstream mirror",
         src=str(src),
         dest=f"/etc/yum.repos.d/{dest}",
         mode="0644",
@@ -215,12 +212,12 @@ server.shell(
 # 7. The offline bundle (container images, Cilium CLI/chart) was already rsynced
 # to /opt/k8s-offline by scripts/download_offline.py — no upload here.
 
-# 8. Point dnf at the internal repo mirror (deploy/repo.py serves it, see
-# templates/kubernetes.repo.j2) and install containerd.io + kubelet/kubeadm/
-# kubectl from there. All base deps already resolve from the mirror via the
-# re-pointed almalinux-*.repo files above. dnf.packages only installs the
-# missing ones (latest=False, so present packages are never upgraded), keeping
-# a converged re-run from touching the installed runtime.
+# 8. Point dnf at the upstream k8s / containerd repos (pkgs.k8s.io and
+# download.docker.com) and install containerd.io + kubelet/kubeadm/kubectl from
+# there. All base deps already resolve from the NJU upstream via the re-pointed
+# almalinux-*.repo files above. dnf.packages only installs the missing ones
+# (latest=False, so present packages are never upgraded), keeping a converged
+# re-run from touching the installed runtime.
 def rpm_db_has(pkg: str) -> bool:
     return (
         (
@@ -232,23 +229,21 @@ def rpm_db_has(pkg: str) -> bool:
 
 
 files.template(
-    name="Point dnf at the internal kubernetes mirror",
+    name="Point dnf at the upstream kubernetes repo (pkgs.k8s.io)",
     src=str(config.REPO_ROOT / "templates" / "kubernetes.repo.j2"),
     dest="/etc/yum.repos.d/kubernetes.repo",
-    mirror_url=config.REPO_MIRROR_URL,
-    k8s_repo_path=config.K8S_REPO_SERVED_PATH,
+    repo_base=config.K8S_UPSTREAM_BASE,
     _sudo=True,
 )
 files.template(
-    name="Point dnf at the internal containerd mirror",
+    name="Point dnf at the upstream containerd repo (download.docker.com)",
     src=str(config.REPO_ROOT / "templates" / "docker-ce.repo.j2"),
     dest="/etc/yum.repos.d/docker-ce.repo",
-    mirror_url=config.REPO_MIRROR_URL,
-    docker_repo_path=config.DOCKER_REPO_SERVED_PATH,
+    repo_base=config.DOCKER_UPSTREAM_BASE,
     _sudo=True,
 )
 dnf.packages(
-    name="Install containerd.io + k8s RPMs + nftables from the internal mirror",
+    name="Install containerd.io + k8s RPMs + nftables from upstream",
     packages=[
         "kubelet",
         "kubeadm",

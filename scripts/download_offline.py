@@ -3,19 +3,22 @@
 an offline bundle under ./offline and rsyncing it to every node's
 /opt/k8s-offline (upload needs no pyinfra).
 
-k8s/containerd RPMs are installed from the internal repo mirror (deploy/repo.py),
-so they are NOT part of the bundle; only container images + Cilium artifacts are.
+k8s/containerd RPMs are installed by deploy/prepare.py straight from the upstream
+repos (pkgs.k8s.io / download.docker.com), so they are NOT part of the bundle;
+only container images + Cilium artifacts are.
 
 The k8s image list comes straight from the LOCAL kubeadm (must match the version
-the mirror serves to the nodes): `kubeadm config images list` emits every image
-kubeadm init/join will reference, so no mirror-side version resolution is needed.
-Before building, the host kubeadm version is verified against the kubelet the
-mirror currently serves (ssh `dnf repoquery` over the mirror's own repodata) and
-aborts on mismatch. Cilium images are a fixed list for the pinned chart version
-(no helm rendering).
+the nodes will install from pkgs.k8s.io): `kubeadm config images list` emits
+every image kubeadm init/join will reference, so no upstream-side version
+resolution is needed. Before building, the host kubeadm version is verified
+against the newest kubelet the upstream pkgs.k8s.io repo serves (host-side
+`dnf repoquery` via --repofrompath) and aborts on mismatch; if the host has no
+dnf (or dnf cannot resolve pkgs.k8s.io) the check degrades to a warning. Cilium
+images are a fixed list for the pinned chart version (no helm rendering).
 
 Requires on the host: docker (for image export), kubeadm, rsync + ssh access to
-the nodes AND the mirror VM (admin@k8s-repo). HTTP downloads go through httpx.
+the nodes, and a reachable pkgs.k8s.io for the version check. HTTP downloads go
+through httpx.
 
     uv run python scripts/download_offline.py            # build ./offline + upload
     uv run python scripts/download_offline.py --no-upload
@@ -61,7 +64,6 @@ class Settings:
     cilium_arch: str
     ssh_user: str
     ssh_key: Path
-    mirror_ip: str
 
     def all_cilium_images(self) -> list[str]:
         return [
@@ -92,7 +94,7 @@ def parse_args() -> tuple[Settings, Options]:
     parser.add_argument(
         "--skip-version-check",
         action="store_true",
-        help="do not verify the host kubeadm matches the mirror's k8s version",
+        help="do not verify the host kubeadm matches the upstream k8s version",
     )
     ns = parser.parse_args()
 
@@ -114,7 +116,6 @@ def parse_args() -> tuple[Settings, Options]:
             ssh_key=Path(
                 os.environ.get("SSH_KEY", str(Path.home() / ".ssh" / "id_ed25519"))
             ),
-            mirror_ip=os.environ.get("REPO_MIRROR_IP", config.REPO_MIRROR_IP),
         ),
         Options(
             no_upload=ns.no_upload,
@@ -178,59 +179,52 @@ def normalize_version(ver: str) -> str:
     return ver.lstrip("v")
 
 
-def mirror_k8s_version(settings: Settings) -> str:
-    """The k8s version the mirror currently serves (what nodes would install).
+def upstream_k8s_version() -> str | None:
+    """The newest kubelet version pkgs.k8s.io currently serves (what the nodes
+    would install), resolved from THIS host.
 
-    Queries the mirror's OWN repodata (createrepo_c-built) over 127.0.0.1 via an
-    ad-hoc repo, so it reflects what the nodes will actually get. Errors out when
-    the mirror isn't reachable / provisioned — strict by design.
+    Replaces the old check that ssh'd to the lab's mirror VM — the learning env
+    has no internal mirror anymore and installs from pkgs.k8s.io directly.
+    Returns None when dnf is missing or cannot resolve pkgs.k8s.io, so the
+    caller degrades to a warning instead of failing.
     """
-    served_base = f"http://127.0.0.1/{config.K8S_REPO_SERVED_PATH}"
-    query = (
-        "sudo dnf --disablerepo='*' "
-        f"--enablerepo=served --repofrompath=served,{served_base} "
+    if shutil.which("dnf") is None:
+        print("[skip] no dnf on this host; k8s version check degraded to warning")
+        return None
+    base_query = (
+        f"dnf --disablerepo='*' --repofrompath=pkgs,{config.K8S_UPSTREAM_BASE} "
         "-q repoquery --latest-limit 1 --qf '%{VERSION}' kubelet"
     )
-    proc = subprocess.run(
-        [
-            "ssh",
-            "-i",
-            str(settings.ssh_key),
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "ConnectTimeout=10",
-            f"{settings.ssh_user}@{settings.mirror_ip}",
+    for query in (base_query, base_query.replace("dnf", "sudo dnf", 1)):
+        proc = subprocess.run(
             query,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        sys.exit(
-            f"[error] 无法查询镜像源 k8s 版本 ({settings.ssh_user}@{settings.mirror_ip}): "
-            f"{proc.stderr.strip()} - 请先运行 deploy/repo.py, 或加 --skip-version-check"
+            shell=True,
+            check=False,
+            capture_output=True,
+            text=True,
         )
-    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-    if not lines:
-        sys.exit(
-            "[error] 镜像源 k8s repo 中未找到 kubelet 记录 (同步未完成?) - "
-            "请先运行 deploy/repo.py, 或加 --skip-version-check"
-        )
-    return lines[-1]
+        if proc.returncode == 0:
+            lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+            if lines:
+                return lines[-1]
+    print("[skip] could not query pkgs.k8s.io; k8s version check degraded to warning")
+    return None
 
 
-def check_k8s_version(settings: Settings) -> None:
+def check_k8s_version() -> None:
     local_ver = normalize_version(kubeadm_version())
-    mirror_ver = normalize_version(mirror_k8s_version(settings))
-    if local_ver != mirror_ver:
+    upstream_ver = upstream_k8s_version()
+    if upstream_ver is None:
+        print("[warn] 未做版本比对 (宿主机无 dnf 或无法解析 pkgs.k8s.io); 可用 --skip-version-check 显式忽略")
+        return
+    upstream_ver = normalize_version(upstream_ver)
+    if local_ver != upstream_ver:
         sys.exit(
-            f"[error] 宿主机 kubeadm 版本 ({local_ver}) 与镜像源 ({mirror_ver}) 不一致, "
+            f"[error] 宿主机 kubeadm 版本 ({local_ver}) 与 pkgs.k8s.io 当前 kubelet ({upstream_ver}) 不一致, "
             "节点装到的 kubeadm 会引用不存在的预载镜像. "
-            "请升级宿主机 kubeadm 或先同步镜像源, 或加 --skip-version-check"
+            "请升级宿主机 kubeadm 或加 --skip-version-check"
         )
-    print(f"[*] 版本校验通过: {local_ver} == {mirror_ver}")
+    print(f"[*] 版本校验通过: {local_ver} == {upstream_ver}")
 
 
 def scope_for(image: str) -> str:
@@ -360,7 +354,7 @@ def main() -> int:
     k8s_imgs = kubeadm_images()
     print(f"[*] Kubernetes version: {k8s_ver}")
     if not options.skip_version_check:
-        check_k8s_version(settings)
+        check_k8s_version()
     (settings.offline_dir / "k8s-version.txt").write_text(f"{k8s_ver}\n")
 
     with new_client() as client:

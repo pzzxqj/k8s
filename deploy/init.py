@@ -35,8 +35,8 @@ if not _common.is_master():
 JOIN_CMD_MASTER = "/etc/kubernetes/join-command.txt"
 
 # Resolve the running k8s version from the installed kubeadm (single source of
-# truth, since RPMs now come from the internal mirror). Fall back to the
-# offline bundle's k8s-version.txt if kubeadm isn't query-able yet.
+# truth, since RPMs now come from the upstream pkgs.k8s.io repo). Fall back to
+# the offline bundle's k8s-version.txt if kubeadm isn't query-able yet.
 
 
 def installed_k8s_version() -> str:

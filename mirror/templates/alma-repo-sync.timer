@@ -1,5 +1,5 @@
 [Unit]
-Description=Periodic internal RPM mirror sync
+Description=Daily AlmaLinux 10 mirror sync
 
 [Timer]
 OnCalendar=daily

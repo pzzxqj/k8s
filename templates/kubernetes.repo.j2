@@ -1,6 +1,6 @@
 [kubernetes]
-name=Kubernetes (internal mirror)
-baseurl={{ mirror_url }}/{{ k8s_repo_path }}/
+name=Kubernetes (upstream)
+baseurl={{ repo_base }}/
 enabled=1
 gpgcheck=1
-gpgkey={{ mirror_url }}/{{ k8s_repo_path }}/repodata/repomd.xml.key
+gpgkey={{ repo_base }}/repodata/repomd.xml.key
