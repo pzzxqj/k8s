@@ -1,10 +1,10 @@
 """Shared subprocess helpers for Incus-driven scripts.
 
-Thin wrappers used by both incus/incus_vms.py and scripts/snapshot_alma_repos.py
-so the ``incus ...`` plumbing lives in one place.
+Thin wrappers used by incus/incus_vms.py so the ``incus ...`` plumbing lives in
+one place.
 
 The underscore name marks this as an internal module (same convention as
-deploy/_common.py / deploy/_alma_repos.py); it is not a CLI script.
+deploy/_common.py); it is not a CLI script.
 """
 
 import subprocess

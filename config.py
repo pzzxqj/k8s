@@ -1,14 +1,15 @@
-"""Single source of truth for the k8s lab topology and offline layout.
+"""Single source of truth for the LEARNING k8s lab topology and offline layout.
 
-Both the pyinfra deploy scripts (deploy/*) and the shell tooling derive their
-values from here. Change a node/IP/memory in ONE place.
+VM/network topology lives here (used by incus/incus_vms.py + Justfile). The
+pyinfra node lists live in inventories/learning.py (Host Data); repo sources in
+group_data/.
 
 Upstream repo constants (K8S_MINOR / K8S_UPSTREAM_BASE / DOCKER_UPSTREAM_BASE /
 ALMA_UPSTREAM_BASE) are shared with the intranet mirror and live in
-mirror/config.py — the lab nodes install RPMs straight from those upstreams (no
-internal mirror in the learning env).
+mirror/config.py — the learning cluster's "mirror source" IS those upstreams,
+while production points at the intranet mirror (group_data/production.py).
 
-Artifact versions: Cilium chart/CLI are pinned in scripts/download_offline.py; the
+Artifact versions: Cilium chart/CLI are pinned in scripts/k8s_download_offline.py; the
 k8s version follows the host's local kubeadm (`kubeadm config images list`) and is
 written into the offline bundle's k8s-version.txt.
 """
@@ -17,9 +18,9 @@ import os
 from pathlib import Path
 
 from mirror.config import (
-    ALMA_UPSTREAM_BASE,  # noqa: F401  (re-exported: deploy/prepare.py uses config.ALMA_UPSTREAM_BASE)
-    DOCKER_UPSTREAM_BASE,  # noqa: F401  (re-exported: deploy/prepare.py uses config.DOCKER_UPSTREAM_BASE)
-    K8S_UPSTREAM_BASE,  # noqa: F401  (re-exported: deploy/prepare.py + download_offline.py)
+    ALMA_UPSTREAM_BASE,  # noqa: F401  (re-exported: group_data/learning.py uses config.ALMA_UPSTREAM_BASE)
+    DOCKER_UPSTREAM_BASE,  # noqa: F401  (re-exported: group_data/learning.py uses config.DOCKER_UPSTREAM_BASE)
+    K8S_UPSTREAM_BASE,  # noqa: F401  (re-exported: group_data/learning.py + k8s_download_offline.py)
 )
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -39,7 +40,6 @@ APISERVER_PORT = "6443"
 # Pod-network-agnostic service subnet; kubeadm networking.serviceSubnet.
 SERVICE_SUBNET = "10.96.0.0/12"
 WORKER_IPS = ["10.98.68.11", "10.98.68.12"]
-ALL_NODES = [MASTER_IP, *WORKER_IPS]
 
 # VM specs keyed by Incus instance name (used by incus/incus_vms.py)
 VMS = {

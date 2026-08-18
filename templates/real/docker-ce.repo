@@ -1,7 +1,0 @@
-[docker-ce]
-name=Docker CE stable (internal mirror)
-baseurl=http://192.168.90.201/docker-ce/linux/centos/10/x86_64/stable/
-enabled=1
-gpgcheck=1
-repo_gpgcheck=0
-gpgkey=http://192.168.90.201/docker-ce/linux/centos/gpg

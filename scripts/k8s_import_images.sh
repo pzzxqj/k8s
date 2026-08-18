@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Import the offline image tarballs into the k8s.io containerd namespace.
-# Usage: import_images.sh <all|master>
+# Usage: k8s_import_images.sh <all|master>
 #   all    - import only "all"-scope images (workers)
 #   master - import every image, including control-plane-only tars (master)
 #
 # The image->scope mapping comes from /opt/k8s-offline/images/import-plan.txt
-# produced by download_offline.py. Re-running is safe: already-present images
+# produced by k8s_download_offline.py. Re-running is safe: already-present images
 # are skipped.
 set -euo pipefail
 
 IMAGES_DIR="${IMAGES_DIR:-/opt/k8s-offline/images}"
 NS="k8s.io"
-SCOPE="${1:?usage: import_images.sh <all|master>}"
+SCOPE="${1:?usage: k8s_import_images.sh <all|master>}"
 
 command -v ctr >/dev/null 2>&1 || { echo "ctr not found" >&2; exit 1; }
 

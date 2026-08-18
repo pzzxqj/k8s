@@ -3,7 +3,7 @@
   "venv": ".venv",
   "typeCheckingMode": "basic",
   "pythonVersion": "3.14",
-  "include": ["config.py", "deploy", "incus", "inventory.py", "scripts"],
+  "include": ["config.py", "deploy", "tasks", "group_data", "inventories", "incus", "scripts"],
   "exclude": ["offline", "scripts/offline", "**/__pycache__", "templates"],
   "extraPaths": ["deploy", "incus"],
   "reportUnusedCallResult": "none",

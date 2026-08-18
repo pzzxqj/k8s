@@ -12,8 +12,8 @@ by `just verify`; override with --kubeconfig) and checks the lab's invariants:
 
 Exits non-zero when any check fails.
 
-    uv run python scripts/verify_cluster.py
-    uv run python scripts/verify_cluster.py --kubeconfig /path/admin.conf
+    uv run python scripts/k8s_verify_cluster.py
+    uv run python scripts/k8s_verify_cluster.py --kubeconfig /path/admin.conf
 """
 
 from __future__ import annotations

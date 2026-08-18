@@ -3,7 +3,7 @@
 an offline bundle under ./offline and rsyncing it to every node's
 /opt/k8s-offline (upload needs no pyinfra).
 
-k8s/containerd RPMs are installed by deploy/prepare.py straight from the upstream
+k8s/containerd RPMs are installed by deploy/k8s_prepare.py straight from the upstream
 repos (pkgs.k8s.io / download.docker.com), so they are NOT part of the bundle;
 only container images + Cilium artifacts are.
 
@@ -20,10 +20,15 @@ Requires on the host: docker (for image export), kubeadm, rsync + ssh access to
 the nodes, and a reachable pkgs.k8s.io for the version check. HTTP downloads go
 through httpx.
 
-    uv run python scripts/download_offline.py            # build ./offline + upload
-    uv run python scripts/download_offline.py --no-upload
-    uv run python scripts/download_offline.py --skip-version-check
-    OFFLINE_DIR=/path uv run python scripts/download_offline.py
+The upload targets come from a pyinfra inventory file (Host Data drives
+ssh_hostname/ssh_user), so learning and production work identically — only the
+--inventory differs.
+
+    uv run python scripts/k8s_download_offline.py                       # learning (default)
+    uv run python scripts/k8s_download_offline.py --no-upload
+    uv run python scripts/k8s_download_offline.py --inventory inventories/production.py
+    uv run python scripts/k8s_download_offline.py --skip-version-check
+    OFFLINE_DIR=/path uv run python scripts/k8s_download_offline.py
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ import argparse
 import hashlib
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -62,8 +68,9 @@ class Settings:
     cilium_chart_ver: str
     cilium_cli_ver: str
     cilium_arch: str
-    ssh_user: str
     ssh_key: Path
+    inventory: Path
+    group: str
 
     def all_cilium_images(self) -> list[str]:
         return [
@@ -77,6 +84,35 @@ class Settings:
 class Options:
     no_upload: bool = False
     skip_version_check: bool = False
+
+
+def load_targets(inventory: Path, group: str) -> list[tuple[str, str]]:
+    """(ssh_hostname, ssh_user) pairs from an inventory file's Host Data.
+
+    The inventory is a plain python module (pyinfra host lists); reusing it here
+    keeps the single source of truth. Each entry is either a bare host string
+    or a ``(name, data)`` tuple with ssh_hostname / ssh_user data keys.
+    """
+    if not inventory.is_file():
+        sys.exit(f"[error] inventory not found: {inventory}")
+    ns = runpy.run_path(str(inventory))
+    entries = ns.get(group)
+    if entries is None:
+        sys.exit(
+            f"[error] inventory {inventory} has no group {group!r} "
+            f"(groups: {sorted(k for k, v in ns.items() if isinstance(v, (list, tuple)) and not k.startswith('_'))})"
+        )
+    targets: list[tuple[str, str]] = []
+    for entry in entries:
+        if isinstance(entry, tuple) and len(entry) == 2:
+            name, data = entry
+            ip = str(data.get("ssh_hostname", name))
+            user = str(data.get("ssh_user", config.SSH_USER))
+        else:
+            ip = user = str(entry)
+            user = config.SSH_USER
+        targets.append((ip, user))
+    return targets
 
 
 def parse_args() -> tuple[Settings, Options]:
@@ -96,6 +132,17 @@ def parse_args() -> tuple[Settings, Options]:
         action="store_true",
         help="do not verify the host kubeadm matches the upstream k8s version",
     )
+    parser.add_argument(
+        "--inventory",
+        type=Path,
+        default=Path("inventories/learning.py"),
+        help="inventory file whose nodes receive the bundle (default: learning)",
+    )
+    parser.add_argument(
+        "--group",
+        default="nodes",
+        help="group within the inventory to upload to (default: nodes)",
+    )
     ns = parser.parse_args()
 
     arch = os.environ.get("ARCH", "x86_64")
@@ -112,10 +159,13 @@ def parse_args() -> tuple[Settings, Options]:
             cilium_chart_ver=os.environ.get("CILIUM_CHART_VER", "1.20.0"),
             cilium_cli_ver=os.environ.get("CILIUM_CLI_VER", "0.19.7"),
             cilium_arch="amd64",
-            ssh_user=os.environ.get("SSH_USER", config.SSH_USER),
             ssh_key=Path(
                 os.environ.get("SSH_KEY", str(Path.home() / ".ssh" / "id_ed25519"))
             ),
+            inventory=Path(
+                os.environ.get("OFFLINE_INVENTORY", str(ns.inventory))
+            ).resolve(),
+            group=ns.group,
         ),
         Options(
             no_upload=ns.no_upload,
@@ -340,8 +390,8 @@ def shlex_quote(s: str) -> str:
 
 def upload_offline(settings: Settings) -> None:
     src = f"{settings.offline_dir}/"
-    for node in config.ALL_NODES:
-        dest = f"{settings.ssh_user}@{node}:{config.NODE_OFFLINE_DIR}/"
+    for ip, user in load_targets(settings.inventory, settings.group):
+        dest = f"{user}@{ip}:{config.NODE_OFFLINE_DIR}/"
         print(f"[*] rsync bundle -> {dest}")
         subprocess.run([*rsync_args(settings), src, dest], check=True)
 

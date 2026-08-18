@@ -1,11 +1,13 @@
-"""Shared helpers for the pyinfra deploy scripts in this directory.
+"""Shared helpers for the pyinfra deploy scripts and tasks.
 
-Each deploy script starts with the 3-line bootstrap:
+Every deploy orchestrator (deploy/*.py) starts with the bootstrap that puts the
+repo root on sys.path, then the tasks (tasks/*.py), loaded via local.include,
+import `from deploy import _common` and `import config` the same way.
 
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parent))  # this dir
-    import _common  # noqa: E402
+Host/role data is data-driven (inventory Host Data + group_data), so the
+"control plane" role is group membership (`control_plane` group exists in every
+inventory) and the SSH user comes from host data (admin for learning, zhch for
+production).
 """
 
 import sys
@@ -27,12 +29,17 @@ SYSCTL_CONF = "/etc/sysctl.d/k8s.conf"
 ADMIN_CONF = "/etc/kubernetes/admin.conf"
 KUBELET_CONF = "/etc/kubernetes/kubelet.conf"
 KUBEADM_YAML = "/etc/kubernetes/kubeadm.yaml"
-JOIN_CMD_DST = f"{config.NODE_OFFLINE_DIR}/join-command.txt"
+JOIN_CMD_DST = f"{host.data.get('node_offline_dir', config.NODE_OFFLINE_DIR)}/join-command.txt"
 
 
-def is_master() -> bool:
-    """True when this inventory host is the control-plane node."""
-    return host.name == config.MASTER_IP
+def is_control_plane() -> bool:
+    """True when this host is in the `control_plane` group (any env)."""
+    return "control_plane" in host.groups
+
+
+def ssh_user() -> str:
+    """The SSH user for this host (Host Data), falling back to config."""
+    return str(host.data.get("ssh_user") or config.SSH_USER)
 
 
 def safe_file_exists(path: str) -> bool:

@@ -21,9 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # this dir (for _incus)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "deploy"))
 
-import _alma_repos
 from _incus import instance_exists, run
 
 import config
@@ -86,20 +84,16 @@ def user_data(name: str, settings: Settings) -> str:
     with open(settings.ssh_pub_key) as f:
         key = f.read().strip()
     hosts_file = f"      127.0.0.1   localhost\n{hosts}"
-    # Alma repos are fully managed: cloud-init writes the rendered templates
-    # (see deploy/_alma_repos.py) baked to the NJU upstream, so every node boots
-    # against the same base the rest of the cluster uses; deploy/prepare.py
-    # later pushes the same render under its own role.
-    consumer = "node"
-    repo_files = "\n".join(
-        f"  - path: /etc/yum.repos.d/{dest}\n"
-        "    content: |\n"
-        + "\n".join(
-            f"      {line}" for line in _alma_repos.render_alma_repo(
-                src, dest, config.ALMA_UPSTREAM_BASE, consumer=consumer
-            ).splitlines()
-        )
-        for dest, src in sorted(_alma_repos.alma_repo_templates().items())
+    # Repos are configured by the same rule everywhere: for the learning env
+    # "the intranet mirror IS the upstream", so alma repos are pointed at NJU
+    # (cancel mirrorlist, use baseurl) BEFORE the first dnf so even the
+    # cloud-init package install never touches the internet mirrorlist.
+    # deploy/k8s_prepare.py later converges the identical result via tasks/alma_repos.py.
+    alma_base = config.ALMA_UPSTREAM_BASE
+    alma_sed = (
+        "sed -i 's/^mirrorlist=/# mirrorlist=/; "
+        f"s|^#\\? *baseurl=https://repo.almalinux.org/almalinux|baseurl={alma_base}|' "
+        "/etc/yum.repos.d/almalinux*.repo"
     )
     return f"""#cloud-config
 hostname: {name}
@@ -118,10 +112,9 @@ write_files:
   - path: /etc/hosts
     content: |
 {hosts_file}
-{repo_files}
 runcmd:
+  - {alma_sed}
   - dnf clean all
-  - dnf -y upgrade
   - dnf -y install rsync openssh-server
   - systemctl enable --now sshd
   - sh -c 'grep -q "^Subsystem sftp" /etc/ssh/sshd_config || echo "Subsystem sftp /usr/libexec/openssh/sftp-server" >> /etc/ssh/sshd_config'
