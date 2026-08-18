@@ -183,18 +183,37 @@ kubectl -n kube-system get ds      # 无 kube-proxy DaemonSet（kube-proxy free�
 curl -sk https://10.96.0.1:443/version   # ClusterIP Service 路径（由 Cilium eBPF 处理）
 
 # 跨节点 Pod→Pod 数据面实测（离线环境无 dig/nslookup，复用 coredns 镜像做链式转发：
-# test pod(host 上 coredns 镜像自起 :5353) forward 到另一节点 coredns Pod IP，
-# test pod 日志出现 NOERROR + ra 即链路通。）
-kubectl -n kube-system create cm testdns-cfg \
-  --from-literal=Corefile='.:5353 { forward . 10.0.2.6; log; errors }'
+# test pod 自起 :5353 并 forward 到另一节点 coredns Pod IP，日志出现 NOERROR 即链路通。
+# 注意：coredns 只认多行 Corefile（单行分号式 `{ forward . IP; log }` 会报
+# "Unexpected '}'"——caddy 语法不支持），转发目标须取实际 coredns Pod IP；
+# 若取到的 coredns 恰在 nodeName 节点，换 .items[1] 或改 nodeName 保证跨节点。）
+CK_IP=$(kubectl -n kube-system get pods -l k8s-app=kube-dns \
+  -o jsonpath='{.items[0].status.podIP}')
+cat > /tmp/testdns-cf.yaml <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: testdns-cfg
+  namespace: kube-system
+data:
+  Corefile: |
+    .:5353 {
+        forward . $CK_IP
+        log
+        errors
+    }
+EOF
+kubectl create -f /tmp/testdns-cf.yaml
 kubectl -n kube-system run testdns --image=registry.k8s.io/coredns/coredns:v1.14.2 \
-  --restart=Never --overrides='{"spec":{"nodeName":"k8s-master",\
+  --restart=Never --overrides='{"spec":{"nodeName":"k8s-worker-2",\
   "containers":[{"name":"dns","image":"registry.k8s.io/coredns/coredns:v1.14.2",\
   "command":["/coredns","-conf","/cfg/Corefile"],\
   "volumeMounts":[{"name":"cfg","mountPath":"/cfg"}]}],\
   "volumes":[{"name":"cfg","configMap":{"name":"testdns-cfg"}}]}}'
 IP=$(kubectl -n kube-system get pod testdns -o jsonpath='{.status.podIP}')
 # host 上以 bash /dev/udp 手搓 DNS 查询包发给 testdns:5353，再查其日志：
+printf '\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01' \
+  > /dev/udp/$IP/5353
 kubectl -n kube-system logs pod/testdns | grep example.com   # 期待 NOERROR 行
 kubectl -n kube-system delete pod/testdns cm/testdns-cfg
 ```
@@ -208,4 +227,4 @@ kubectl -n kube-system delete pod/testdns cm/testdns-cfg
 - **离线拉取镜像失败**：镜像 tag 与 kubeadm/Cilium chart 不一致。镜像清单来自宿主机本地 `kubeadm config images list`（若 pkgs.k8s.io 上游升级了 patch，需同步升级宿主机 kubeadm）与固定 Cilium 清单（见 `scripts/k8s_download_offline.py`），重新跑 `uv run python scripts/k8s_download_offline.py` 会重新生成 `offline/images/import-plan.txt`。
 - **版本校验报错**（`宿主机 kubeadm 版本 (X) 与 pkgs.k8s.io 当前 kubelet (Y) 不一致`）：上游已更新到新的 patch 而宿主机 kubeadm 未同步。先 `dnf --disablerepo='*' --repofrompath=pkgs,https://pkgs.k8s.io/core:/stable:/v1.36/rpm -q repoquery --latest-limit 1 --qf '%{VERSION}' kubelet` 查上游当前版本，把宿主机 kubeadm 升级到同版本再跑；确需强行构建可用 `--skip-version-check`。
 - **版本校验跳过**：`k8s_download_offline.py` 依赖宿主机 `dnf` 解析 pkgs.k8s.io；宿主机无 dnf（或无法访问 pkgs.k8s.io）时自动降级为仅提示，不报错退出——加 `--skip-version-check` 可显式忽略。
-- **幂等**：所有 recipe 可重复执行；`just all` 重跑全为 No-change/跳过，且不重启运行中的 kubelet。
+- **幂等**：所有 recipe 可重复执行；`just all` 重跑全为 No-change/跳过，且不重启运行中的 kubelet。`tasks/alma_repos.py` 跳过与 `alma_base` 相同的已知上游（学习环境即 NJU），避免 baseurl 自匹配反复改写、连带每次触发 `dnf clean all`。

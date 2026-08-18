@@ -57,6 +57,8 @@ for fname in sorted(Path(p).name for p in opfiles):
         )
     )
     for upstream in KNOWN_UPSTREAMS:
+        if upstream == alma_base:
+            continue
         edit_ops.append(
             files.replace(
                 name=f"[{host.name}] {fname}: baseurl host -> {alma_base}",
