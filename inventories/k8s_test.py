@@ -1,4 +1,4 @@
-# pyinfra inventory: learning (Incus lab) k8s cluster.
+# pyinfra inventory: k8s TEST cluster (Incus lab, 10.98.68.x).
 
 # Host NAME is the logical label (pyinfra.host.name); connection details are
 # Host DATA via the SSH connector keys (ssh_hostname / ssh_user) plus our own
@@ -6,9 +6,9 @@
 # (tasks/alma_repos.py, tasks/kubernetes_repo.py, tasks/docker_ce_repo.py)
 # default to all three sources; drop entries here to skip a source per host.
 
-# In the learning environment the "intranet mirror" IS the upstream: repos are
+# In the k8s test environment the "intranet mirror" IS the upstream: repos are
 # pointed straight at NJU / pkgs.k8s.io / download.docker.com (see
-# group_data/learning.py). The learning env has no internal mirror.
+# group_data/k8s_test.py). The test env has no internal mirror.
 
 control_plane = [
     (

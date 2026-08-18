@@ -35,32 +35,32 @@ vm-destroy vms="":
 # come from the repos (pkgs.k8s.io etc.), so nothing to provision first;
 # k8s_download_offline.py verifies the host kubeadm matches the upstream k8s version.
 # Extra flags pass through, e.g. `just offline --no-upload` or
-# `just offline --inventory inventories/production.py` for the production cluster.
+# `just offline --inventory inventories/k8s_production.py` for the production cluster.
 offline args="":
-    uv run python scripts/k8s_download_offline.py --inventory inventories/learning.py {{ args }}
+    uv run python scripts/k8s_download_offline.py --inventory inventories/k8s_test.py {{ args }}
 
 # Point the servers' dnf sources where their Host Data / group_data say
-# (learning = upstream, production = intranet mirror); per-host `repos` subset
-# respected. REPO_INVENTORY defaults to the learning cluster.
-repos inventory="inventories/learning.py":
+# (k8s_test = upstream, k8s_production = intranet mirror); per-host `repos`
+# subset respected. REPO_INVENTORY defaults to the k8s test cluster.
+repos inventory="inventories/k8s_test.py":
     uv run pyinfra -y {{ inventory }} deploy/repos.py
 
 # Prepare all nodes: kernel/swap/selinux, containerd, k8s RPMs (repos from
-# group_data/learning.py = upstream), preload the offline images into containerd.
+# group_data/k8s_test.py = upstream), preload the offline images into containerd.
 # SSH user comes from Host Data; auth via the local ssh-agent / default keys.
 prepare: offline
-    uv run pyinfra -y inventories/learning.py deploy/k8s_prepare.py --limit nodes
+    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_prepare.py --limit nodes
 
 # Bootstrap the control plane on the master + install Cilium (offline chart).
 init: prepare
-    uv run pyinfra -y inventories/learning.py deploy/k8s_init.py --limit control_plane
+    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_init.py --limit control_plane
 
 # Fetch the join command from the master, then join the workers.
 join: init
     scp -i {{ key }} -o StrictHostKeyChecking=accept-new \
         {{ ssh_user }}@{{ master_ip }}:/etc/kubernetes/join-command.txt \
         {{ offline_dir }}/join-command.txt
-    uv run pyinfra -y inventories/learning.py deploy/k8s_join.py --limit workers
+    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_join.py --limit workers
 
 # Verify the cluster: fetch the admin kubeconfig (the /etc/kubernetes/admin.conf
 # copy is 0600 root-only; ~admin/.kube/config is the identical admin-readable

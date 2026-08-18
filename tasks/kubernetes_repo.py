@@ -6,8 +6,8 @@ the file is rendered (templates/kubernetes.repo.j2) against ``k8s_repo_base``
 when the file actually changed.
 
 Subset handling is per-host (via ``_if``), never a module-level branch, so one
-task file serves learning (upstream pkgs.k8s.io) and production (mirror) and
-mixed hosts within an inventory.
+task file serves the k8s test cluster (upstream pkgs.k8s.io) and k8s production
+(mirror) and mixed hosts within an inventory.
 """
 
 import sys

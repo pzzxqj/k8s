@@ -1,14 +1,14 @@
 """Repos-only orchestrator: point a server's dnf sources where its data says.
 
-Environment-agnostic — there is no "learning" or "production" branch here. The
-atomic repo tasks read the source bases from group data (learning.py = upstream,
-production.py = intranet mirror) and the per-host ``repos`` subset from Host
+Environment-agnostic — there is no "test" or "production" branch here. The
+atomic repo tasks read the source bases from group data (k8s_test.py = upstream,
+k8s_production.py = intranet mirror) and the per-host ``repos`` subset from Host
 Data. Any server (including non-k8s hosts that only want the Alma source) can be
 added to an inventory with, say, ``"repos": ["alma"]`` and managed with this.
 
 Run against any file-based inventory:
-    uv run pyinfra -y inventories/production.py deploy/repos.py
-    uv run pyinfra -y inventories/production.py deploy/repos.py --limit control_plane
+    uv run pyinfra -y inventories/k8s_production.py deploy/repos.py
+    uv run pyinfra -y inventories/k8s_production.py deploy/repos.py --limit control_plane
 """
 
 import sys

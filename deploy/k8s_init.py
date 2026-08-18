@@ -4,8 +4,8 @@ Orchestrates the control-plane atomic tasks (run the same way in every
 environment). Run ONLY against the `control_plane` group, after
 deploy/k8s_prepare.py:
 
-    uv run pyinfra -y inventories/learning.py deploy/k8s_init.py --limit control_plane
-    uv run pyinfra -y inventories/production.py deploy/k8s_init.py --limit control_plane
+    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_init.py --limit control_plane
+    uv run pyinfra -y inventories/k8s_production.py deploy/k8s_init.py --limit control_plane
 
 Idempotent: kubeadm init is skipped once /etc/kubernetes/admin.conf exists; the
 admin kubeconfig and Cilium CLI are only (re)installed on drift; `cilium

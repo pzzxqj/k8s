@@ -4,8 +4,8 @@ Run ONLY against the `workers` group, after the master is initialized and the
 join command has been fetched from it into $OFFLINE_DIR/join-command.txt
 (`just join` does this automatically):
 
-    uv run pyinfra -y inventories/learning.py deploy/k8s_join.py --limit workers
-    uv run pyinfra -y inventories/production.py deploy/k8s_join.py --limit workers
+    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_join.py --limit workers
+    uv run pyinfra -y inventories/k8s_production.py deploy/k8s_join.py --limit workers
 
 Idempotent: skips a node once /etc/kubernetes/kubelet.conf exists.
 """

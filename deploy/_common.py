@@ -6,8 +6,8 @@ import `from deploy import _common` and `import config` the same way.
 
 Host/role data is data-driven (inventory Host Data + group_data), so the
 "control plane" role is group membership (`control_plane` group exists in every
-inventory) and the SSH user comes from host data (admin for learning, zhch for
-production).
+inventory) and the SSH user comes from host data (admin for the k8s test
+cluster, zhch for k8s production).
 """
 
 import sys

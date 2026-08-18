@@ -1,15 +1,15 @@
-"""Prepare nodes for kubeadm (learning + production share this orchestrator).
+"""Prepare nodes for kubeadm (k8s test + production share this orchestrator).
 
 Everything the nodes install comes from repos the repo tasks just pointed at
-the right source (upstream for learning, intranet mirror for production): Alma
-base packages, containerd.io, k8s RPMs. Container images + Cilium come from the
-offline bundle at /opt/k8s-offline (pushed by scripts/k8s_download_offline.py,
-rsync, no pyinfra).
+the right source (upstream for the k8s test cluster, intranet mirror for
+production): Alma base packages, containerd.io, k8s RPMs. Container images +
+Cilium come from the offline bundle at /opt/k8s-offline (pushed by
+scripts/k8s_download_offline.py, rsync, no pyinfra).
 
 Workflow:
-    uv run python scripts/k8s_download_offline.py --inventory inventories/learning.py
-    uv run pyinfra -y inventories/learning.py deploy/k8s_prepare.py
-    (or inventories/production.py for the production cluster)
+    uv run python scripts/k8s_download_offline.py --inventory inventories/k8s_test.py
+    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_prepare.py
+    (or inventories/k8s_production.py for the production cluster)
 
 Idempotent: re-runs are no-change and never restart a running kubelet.
 """

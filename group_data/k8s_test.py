@@ -1,6 +1,6 @@
-# pyinfra group data: learning environment (inventories/learning.py).
+# pyinfra group data: k8s test environment (inventories/k8s_test.py).
 #
-# The learning env has NO internal mirror: its "mirror source" IS the upstream,
+# The test env has NO internal mirror: its "mirror source" IS the upstream,
 # so the repo tasks point straight at NJU / pkgs.k8s.io / download.docker.com.
 # See mirror/config.py for the canonical upstream constants.
 import sys

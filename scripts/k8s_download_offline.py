@@ -21,12 +21,12 @@ the nodes, and a reachable pkgs.k8s.io for the version check. HTTP downloads go
 through httpx.
 
 The upload targets come from a pyinfra inventory file (Host Data drives
-ssh_hostname/ssh_user), so learning and production work identically — only the
---inventory differs.
+ssh_hostname/ssh_user), so the k8s test and production clusters work identically
+— only the --inventory differs.
 
-    uv run python scripts/k8s_download_offline.py                       # learning (default)
+    uv run python scripts/k8s_download_offline.py                       # k8s_test (default)
     uv run python scripts/k8s_download_offline.py --no-upload
-    uv run python scripts/k8s_download_offline.py --inventory inventories/production.py
+    uv run python scripts/k8s_download_offline.py --inventory inventories/k8s_production.py
     uv run python scripts/k8s_download_offline.py --skip-version-check
     OFFLINE_DIR=/path uv run python scripts/k8s_download_offline.py
 """
@@ -135,8 +135,8 @@ def parse_args() -> tuple[Settings, Options]:
     parser.add_argument(
         "--inventory",
         type=Path,
-        default=Path("inventories/learning.py"),
-        help="inventory file whose nodes receive the bundle (default: learning)",
+        default=Path("inventories/k8s_test.py"),
+        help="inventory file whose nodes receive the bundle (default: k8s_test)",
     )
     parser.add_argument(
         "--group",
@@ -233,7 +233,7 @@ def upstream_k8s_version() -> str | None:
     """The newest kubelet version pkgs.k8s.io currently serves (what the nodes
     would install), resolved from THIS host.
 
-    Replaces the old check that ssh'd to the lab's mirror VM — the learning env
+    Replaces the old check that ssh'd to the lab's mirror VM — the k8s test env
     has no internal mirror anymore and installs from pkgs.k8s.io directly.
     Returns None when dnf is missing or cannot resolve pkgs.k8s.io, so the
     caller degrades to a warning instead of failing.

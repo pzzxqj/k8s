@@ -3,7 +3,7 @@
 本文档覆盖两套环境，镜像站与节点网络互相独立。两套环境跑**同一套 pyinfra 部署流程**（`deploy/*.py` 编排 + `tasks/*.py` 原子任务），差异只体现在 `inventories/` 的 Host Data 与 `group_data/` 的镜像源数据：
 
 1. **生产环境（192.168.90.x）**：当前在用的内网集群（k8s-master1/worker1/worker2）与镜像站 `192.168.90.201`，后者全量镜像 AlmaLinux 10 + docker-ce + kubernetes，走三套 systemd 定时同步。镜像站的部署脚本/配置独立在 `mirror/`（与 k8s 分离）。节点 dnf 源全部指向镜像站。
-2. **学习环境（Incus 实验集群，10.98.68.x）**：在 Incus 的 3 台 AlmaLinux 10 VM 上用 kubeadm + containerd + Cilium 部署学习用 Kubernetes v1.36，无内网镜像——「内网镜像」就是上游（pkgs.k8s.io / download.docker.com / NJU）；容器镜像与 Cilium 走离线包。
+2. **测试环境（Incus 实验集群，10.98.68.x）**：在 Incus 的 3 台 AlmaLinux 10 VM 上用 kubeadm + containerd + Cilium 部署测试用 Kubernetes v1.36，无内网镜像——「内网镜像」就是上游（pkgs.k8s.io / download.docker.com / NJU）；容器镜像与 Cilium 走离线包。
 
 ---
 
@@ -50,31 +50,31 @@ curl -fsSL http://192.168.90.201/kubernetes/core:/stable:/v1.36/rpm/repodata/rep
 
 ### 客户端配置（生产节点）
 
-生产节点走与学习环境完全相同的 pyinfra 流程，只是 inventory 与 group data 不同：节点信息（IP/用户/`repos` 子集）在 `inventories/production.py` 的 Host Data，dnf 源 URL 在 `group_data/production.py`（派生自 `mirror/config.py`，即镜像站实际同步的内容）。
+生产节点走与测试环境完全相同的 pyinfra 流程，只是 inventory 与 group data 不同：节点信息（IP/用户/`repos` 子集）在 `inventories/k8s_production.py` 的 Host Data，dnf 源 URL 在 `group_data/k8s_production.py`（派生自 `mirror/config.py`，即镜像站实际同步的内容）。
 
 **仅换源**（不跑 prepare）：`deploy/repos.py` 把节点上三类 dnf 源收敛到 Host Data 指定的来源——Alma 基础源就地编辑（取消 `mirrorlist`、baseurl 重指 `http://192.168.90.201/almalinux`，保留原始 URL 尾路径）；`kubernetes.repo`/`docker-ce.repo` 为受管文件（模板在 `templates/`，gpgkey 取镜像站 `repodata/repomd.xml.key` 与 `docker-ce/linux/centos/gpg`）。非 k8s 服务器只想要 Alma 源时，可在 inventory 里写 `"repos": ["alma"]` 后同样跑 `deploy/repos.py`。
 
 ```bash
-uv run pyinfra -y inventories/production.py deploy/repos.py
-uv run pyinfra -y inventories/production.py deploy/repos.py --limit control_plane   # 仅 k8s-master1
+uv run pyinfra -y inventories/k8s_production.py deploy/repos.py
+uv run pyinfra -y inventories/k8s_production.py deploy/repos.py --limit control_plane   # 仅 k8s-master1
 ssh k8s-master1 'sudo dnf repolist'   # 应出现 kubernetes / docker-ce / almalinux 系列，均从镜像源解析
 ```
 
-**完整部署**（与学习环境同一套任务）：先 `just offline --inventory inventories/production.py` 推送离线包，再逐阶段执行：
+**完整部署**（与测试环境同一套任务）：先 `just offline --inventory inventories/k8s_production.py` 推送离线包，再逐阶段执行：
 
 ```bash
-uv run pyinfra -y inventories/production.py deploy/k8s_prepare.py
-uv run pyinfra -y inventories/production.py deploy/k8s_init.py --limit control_plane
-uv run pyinfra -y inventories/production.py deploy/k8s_join.py --limit workers
+uv run pyinfra -y inventories/k8s_production.py deploy/k8s_prepare.py
+uv run pyinfra -y inventories/k8s_production.py deploy/k8s_init.py --limit control_plane
+uv run pyinfra -y inventories/k8s_production.py deploy/k8s_join.py --limit workers
 ```
 
 （ssh 用户来自 Host Data；认证走本地 ssh-agent / 默认密钥，与 `mirror/repo.py` 一致。）
 
 ---
 
-## 学习环境（Incus 实验集群，10.98.68.x）
+## 测试环境（Incus 实验集群，10.98.68.x）
 
-用 **kubeadm + containerd + Cilium** 在 Incus 的 3 台 AlmaLinux 10 VM 上部署学习用 Kubernetes v1.36 集群。RPM 全部**直连上游**下载（无内网镜像），容器镜像与 Cilium 走**离线包**（宿主机下载 → 上传到节点）。
+用 **kubeadm + containerd + Cilium** 在 Incus 的 3 台 AlmaLinux 10 VM 上部署测试用 Kubernetes v1.36 集群。RPM 全部**直连上游**下载（无内网镜像），容器镜像与 Cilium 走**离线包**（宿主机下载 → 上传到节点）。
 
 ### 拓扑
 
@@ -97,14 +97,14 @@ uv run pyinfra -y inventories/production.py deploy/k8s_join.py --limit workers
 ### 目录结构
 
 ```
-config.py                # 单一事实来源：学习环境拓扑/目录/VM 规格（上游源常量取自 mirror/config.py）
+config.py                # 单一事实来源：测试环境拓扑/目录/VM 规格（上游源常量取自 mirror/config.py）
 inventories/             # pyinfra inventory：Host Name + Host Data（ssh_hostname/ssh_user/repos 子集）
-  learning.py            #   学习集群（control_plane / workers / nodes）
-  production.py          #   生产集群（k8s-master1/k8s-worker1/k8s-worker2；可加仅需 alma 源的主机）
+  k8s_test.py            #   测试集群（control_plane / workers / nodes）
+  k8s_production.py      #   生产集群（k8s-master1/k8s-worker1/k8s-worker2；可加仅需 alma 源的主机）
 group_data/              # pyinfra 组数据：镜像源唯一差异点
   all.py                 #   默认值（repos 子集 / apiserver_port / service_subnet / node_offline_dir）
-  learning.py            #   NJU / pkgs.k8s.io / download.docker.com（学习环境「内网镜像=上游」）
-  production.py          #   派生自 mirror/config.py 的镜像站 URL（192.168.90.201）
+  k8s_test.py            #   NJU / pkgs.k8s.io / download.docker.com（测试环境「内网镜像=上游」）
+  k8s_production.py      #   派生自 mirror/config.py 的镜像站 URL（192.168.90.201）
 Justfile                 # just 命令入口：vm-create / vm-destroy / offline / repos / prepare / init / join / verify / all
 mirror/                  # 内网 RPM 镜像站（生产环境，独立于 k8s）
   config.py              #   镜像机/上游源常量（MIRROR_ROOT、pkgs.k8s.io、NJU 等）
@@ -134,7 +134,7 @@ templates/               # 远程配置文件 jinja2 模板
   containerd-config.toml.j2
 scripts/
   k8s_download_offline.py  # 宿主机下载离线包（kubeadm config images list + Cilium）并 rsync 到节点
-                           #   --inventory / --group 决定上传目标（默认学习）
+                           #   --inventory / --group 决定上传目标（默认 k8s_test）
   k8s_import_images.sh   # 节点端镜像导入助手（随包上传到 /opt/k8s-offline/）
   k8s_verify_cluster.py  # 集群验证（官方 kubernetes client，见「验证」）
 offline/                 # 生成的离线包（已 gitignore）
@@ -161,14 +161,14 @@ just all
 
 ```bash
 just offline     # 构建并上传离线包（版本校验直查 pkgs.k8s.io，无 dnf 时降级跳过）
-just repos       # 仅换 dnf 源（默认 learning；REPO_INVENTORY 参数，如 just repos inventories/production.py）
+just repos       # 仅换 dnf 源（默认 k8s_test；REPO_INVENTORY 参数，如 just repos inventories/k8s_production.py）
 just prepare     # 所有节点准备（依赖 offline）
 just init        # master 初始化（依赖 prepare）
 just join        # 拉取 join 命令并加入 workers（依赖 init）
 just verify      # 集群验证（依赖 join）
 ```
 
-生产环境复用同一套 recipe，仅 inventory 不同：`just offline --inventory inventories/production.py`、`uv run pyinfra -y inventories/production.py deploy/{repos,k8s_prepare,k8s_init,k8s_join}.py`（见「生产环境」一节）。
+生产环境复用同一套 recipe，仅 inventory 不同：`just offline --inventory inventories/k8s_production.py`、`uv run pyinfra -y inventories/k8s_production.py deploy/{repos,k8s_prepare,k8s_init,k8s_join}.py`（见「生产环境」一节）。
 
 ### 验证
 
@@ -227,4 +227,4 @@ kubectl -n kube-system delete pod/testdns cm/testdns-cfg
 - **离线拉取镜像失败**：镜像 tag 与 kubeadm/Cilium chart 不一致。镜像清单来自宿主机本地 `kubeadm config images list`（若 pkgs.k8s.io 上游升级了 patch，需同步升级宿主机 kubeadm）与固定 Cilium 清单（见 `scripts/k8s_download_offline.py`），重新跑 `uv run python scripts/k8s_download_offline.py` 会重新生成 `offline/images/import-plan.txt`。
 - **版本校验报错**（`宿主机 kubeadm 版本 (X) 与 pkgs.k8s.io 当前 kubelet (Y) 不一致`）：上游已更新到新的 patch 而宿主机 kubeadm 未同步。先 `dnf --disablerepo='*' --repofrompath=pkgs,https://pkgs.k8s.io/core:/stable:/v1.36/rpm -q repoquery --latest-limit 1 --qf '%{VERSION}' kubelet` 查上游当前版本，把宿主机 kubeadm 升级到同版本再跑；确需强行构建可用 `--skip-version-check`。
 - **版本校验跳过**：`k8s_download_offline.py` 依赖宿主机 `dnf` 解析 pkgs.k8s.io；宿主机无 dnf（或无法访问 pkgs.k8s.io）时自动降级为仅提示，不报错退出——加 `--skip-version-check` 可显式忽略。
-- **幂等**：所有 recipe 可重复执行；`just all` 重跑全为 No-change/跳过，且不重启运行中的 kubelet。`tasks/alma_repos.py` 跳过与 `alma_base` 相同的已知上游（学习环境即 NJU），避免 baseurl 自匹配反复改写、连带每次触发 `dnf clean all`。
+- **幂等**：所有 recipe 可重复执行；`just all` 重跑全为 No-change/跳过，且不重启运行中的 kubelet。`tasks/alma_repos.py` 跳过与 `alma_base` 相同的已知上游（测试环境即 NJU），避免 baseurl 自匹配反复改写、连带每次触发 `dnf clean all`。

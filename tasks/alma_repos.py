@@ -14,10 +14,10 @@ Because the URL tail is preserved, whatever architecture the machine originally
 had ($basearch) is retained — no per-host arch bookkeeping is needed and the
 mirror simply serves both x86_64 and x86_64_v2 paths.
 
-Data: ``alma_base`` (group data: NJU for learning, the intranet mirror for
-production). Idempotent: once the baseurl points at alma_base the line no
-longer matches any known upstream and becomes a no-op; ``dnf clean all`` only
-runs when an edit actually changed something.
+Data: ``alma_base`` (group data: NJU for the k8s test env, the intranet mirror
+for k8s production). Idempotent: once the baseurl points at alma_base the line
+no longer matches any known upstream and becomes a no-op; ``dnf clean all``
+only runs when an edit actually changed something.
 """
 
 import re

@@ -3,7 +3,7 @@
 kube-proxy is NOT installed (--skip-phases=addon/kube-proxy): Cilium fully
 replaces it via eBPF (see tasks/cilium.py / README "kube-proxy free"). The
 advertise address / control-plane endpoint come from the host's ssh_hostname
-data, so learning (.68.10) and production (.90.220) need no special-casing.
+data, so test (.68.10) and production (.90.220) need no special-casing.
 """
 
 import json

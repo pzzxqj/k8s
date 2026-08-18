@@ -84,7 +84,7 @@ def user_data(name: str, settings: Settings) -> str:
     with open(settings.ssh_pub_key) as f:
         key = f.read().strip()
     hosts_file = f"      127.0.0.1   localhost\n{hosts}"
-    # Repos are configured by the same rule everywhere: for the learning env
+    # Repos are configured by the same rule everywhere: for the test env
     # "the intranet mirror IS the upstream", so alma repos are pointed at NJU
     # (cancel mirrorlist, use baseurl) BEFORE the first dnf so even the
     # cloud-init package install never touches the internet mirrorlist.

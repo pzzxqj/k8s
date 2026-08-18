@@ -1,4 +1,4 @@
-# pyinfra group data: production environment (inventories/production.py).
+# pyinfra group data: k8s production environment (inventories/k8s_production.py).
 #
 # Production points all three dnf sources at the intranet mirror
 # (192.168.90.201). URLs are derived from mirror/config.py (single source of
