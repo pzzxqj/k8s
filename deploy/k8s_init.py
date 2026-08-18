@@ -19,10 +19,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pyinfra import local
+from pyinfra.context import host
 
-from deploy import _common
-
-if not _common.is_control_plane():
+if "control_plane" not in host.groups:
     print("[skip] not the control-plane node (missing 'control_plane' group)")
     raise SystemExit(0)
 

@@ -20,11 +20,11 @@ from pyinfra import local
 from pyinfra.context import host
 
 import config
-from deploy import _common, _topology
+from deploy import _topology
 
 topo = _topology.topology()
 
-if not _common.is_control_plane():
+if "control_plane" not in host.groups:
     print("[skip] not the control-plane group")
     raise SystemExit(0)
 

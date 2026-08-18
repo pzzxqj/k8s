@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pyinfra.context import host
+from pyinfra.facts.files import File
 from pyinfra.facts.server import Command
 from pyinfra.operations import files, server
 
@@ -66,5 +67,5 @@ server.shell(
     ],
     _sudo=True,
     _if=lambda: bootstrap_node()
-    and not _common.safe_file_exists(_common.ADMIN_CONF),
+    and host.get_fact(File, path=_common.ADMIN_CONF) is None,
 )

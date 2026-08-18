@@ -8,8 +8,8 @@ only runs HAProxy on the current owner via the notify scripts, so HAProxy never
 clashes with the local kube-apiserver (which binds the node's own IP after the
 `bind-address` extra arg in templates/kubeadm.yaml.j2).
 
-Single-master clusters skip every op (all gated on is_control_plane() and
-topology.ha), preserving the classic no-LB layout.
+Single-master clusters skip every op (all gated on `control_plane` group
+membership and topology.ha), preserving the classic no-LB layout.
 """
 
 import sys
@@ -21,13 +21,13 @@ from pyinfra.context import host
 from pyinfra.operations import dnf, files, server, systemd
 
 import config
-from deploy import _common, _topology
+from deploy import _topology
 
 topo = _topology.topology()
 
 
 def lb_active() -> bool:
-    return _common.is_control_plane() and topo.ha
+    return "control_plane" in host.groups and topo.ha
 
 
 dnf.packages(

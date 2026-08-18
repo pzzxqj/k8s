@@ -16,14 +16,13 @@ from pyinfra.facts.server import Command
 from pyinfra.operations import files, server
 
 import config
-from deploy import _common
 
 offline_dir = host.data.get("node_offline_dir", config.NODE_OFFLINE_DIR)
 
 
 def images_imported() -> bool:
     """True when every image this node needs is already in containerd."""
-    scope = "master" if _common.is_control_plane() else "all"
+    scope = "master" if "control_plane" in host.groups else "all"
     plan = host.get_fact(FileContents, path=f"{offline_dir}/images/import-plan.txt") or []
     wanted: set[str] = set()
     for line in plan:
@@ -58,7 +57,7 @@ server.shell(
     commands=[
         (
             f"bash {offline_dir}/import_images.sh "
-            f"{'master' if _common.is_control_plane() else 'all'}"
+            f"{'master' if 'control_plane' in host.groups else 'all'}"
         )
     ],
     _sudo=True,
