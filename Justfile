@@ -46,7 +46,7 @@ offline args="":
 # Point the servers' dnf sources where their Host Data / group_data say
 # (k8s_test = upstream, k8s_production = intranet mirror); per-host `repos`
 # subset respected. REPO_INVENTORY defaults to the k8s test cluster.
-repos inventory="{{ test_inv }}":
+repos inventory="inventories/k8s_test.py":
     uv run pyinfra -y {{ inventory }} deploy/repos.py
 
 # Prepare all nodes: kernel/swap/selinux, containerd, k8s RPMs (repos from

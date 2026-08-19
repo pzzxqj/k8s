@@ -21,11 +21,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config
 
-REPOS = ["alma", "kubernetes", "docker-ce"]
+# NOTE: pyinfra treats every top-level list/tuple in an inventory file as a
+# host group (so e.g. a list named "REPOS" would become a bogus group with
+# hosts "alma"/"kubernetes"/"docker-ce"). Group names cannot start with "_",
+# so an underscore-prefixed name keeps this a plain constant.
+_REPOS = ["alma", "kubernetes", "docker-ce"]
 
 
 def _host(name: str, ip: str) -> tuple:
-    return (name, {"ssh_hostname": ip, "ssh_user": config.SSH_USER, "repos": REPOS})
+    return (name, {"ssh_hostname": ip, "ssh_user": config.SSH_USER, "repos": _REPOS})
 
 
 control_plane = [_host("k8s-master", config.MASTER_IP)]
