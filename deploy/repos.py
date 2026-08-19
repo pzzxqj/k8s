@@ -2,9 +2,11 @@
 
 Environment-agnostic — there is no "test" or "production" branch here. The
 atomic repo tasks read the source bases from group data (k8s_test.py = upstream,
-k8s_production.py = intranet mirror) and the per-host ``repos`` subset from Host
-Data. Any server (including non-k8s hosts that only want the Alma source) can be
-added to an inventory with, say, ``"repos": ["alma"]`` and managed with this.
+k8s_production.py = intranet mirror) and the `repos` subset from the host's data
+(default from the environment's group_data, e.g. group_data/k8s_test.py; a
+per-host override lists only the subset a server manages). Any server (including
+non-k8s hosts that only want the Alma source) can be added to an inventory with
+per-host `"repos": ["alma"]` and managed with this.
 
 Run against any file-based inventory:
     uv run pyinfra -y inventories/k8s_production.py deploy/repos.py

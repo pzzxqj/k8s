@@ -5,13 +5,10 @@
 # per-host data in the inventories override them (see data hierarchy in the
 # pyinfra docs).
 
-# dnf sources this host manages (atomic repo tasks honour the subset):
-#   alma          -> tasks/alma_repos.py        (in-place baseurl/mirrorlist edit)
-#   kubernetes    -> tasks/kubernetes_repo.py   (managed kubernetes.repo)
-#   docker-ce     -> tasks/docker_ce_repo.py    (managed docker-ce.repo)
-repos = ["alma", "kubernetes", "docker-ce"]
-
-# kubeadm / cluster defaults (test and production share them today).
+# kubeadm / cluster defaults (test and production share them today). The `repos`
+# default (which dnf sources a host manages) lives in the environment group data
+# (k8s_test.py / k8s_production.py); per-host data in the inventories only
+# overrides it with a subset (e.g. ["alma"]) for non-k8s hosts.
 apiserver_port = "6443"
 service_subnet = "10.96.0.0/12"
 node_offline_dir = "/opt/k8s-offline"

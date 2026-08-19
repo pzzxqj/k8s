@@ -15,6 +15,10 @@ k8s_repo_base = f"http://{MIRROR_HOST}/kubernetes/core:/stable:/v{K8S_MINOR}/rpm
 docker_repo_base = f"http://{MIRROR_HOST}/docker-ce/linux/centos/10/x86_64/stable"
 docker_gpg_key = f"http://{MIRROR_HOST}/docker-ce/linux/centos/gpg"
 
+# dnf sources every cluster host manages (repo tasks honour the per-host subset
+# override for non-k8s servers). Both envs use the full set today.
+repos = ["alma", "kubernetes", "docker-ce"]
+
 # HA control-plane endpoint: Keepalived VIP on the 192.168.90.x LAN (pick a
 # spare address). Only used when the inventory declares >1 control-plane node.
 control_plane_endpoint = "192.168.90.230"

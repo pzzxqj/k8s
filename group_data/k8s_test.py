@@ -18,6 +18,10 @@ docker_repo_base = config.DOCKER_UPSTREAM_BASE  # https://download.docker.com/li
 # repo base keeps the host consistent with whichever docker upstream is used.
 docker_gpg_key = f"{config.DOCKER_UPSTREAM_BASE.split('/10/', 1)[0]}/gpg"
 
+# dnf sources every cluster host manages (repo tasks honour the per-host subset
+# override for non-k8s servers). Both envs use the full set today.
+repos = ["alma", "kubernetes", "docker-ce"]
+
 # HA control-plane endpoint: Keepalived VIP on incusbr0 (10.98.68.0/24).
 # Used only when the inventory declares >1 control-plane node.
 control_plane_endpoint = "10.98.68.20"
