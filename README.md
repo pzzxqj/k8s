@@ -90,16 +90,13 @@ uv run pyinfra -y inventories/k8s_production.py deploy/k8s_join.py --limit worke
 
 | 节点 | IP | 内存 | 角色 |
 |---|---|---|---|
-| k8s-master | 10.98.68.10 | 6GiB | control-plane（bootstrap）+ Keepalived/HAProxy + Cilium |
-| k8s-master-2 | 10.98.68.14 | 6GiB | control-plane + Keepalived/HAProxy |
-| k8s-master-3 | 10.98.68.15 | 6GiB | control-plane + Keepalived/HAProxy |
+| k8s-master | 10.98.68.10 | 6GiB | control-plane（bootstrap）+ Cilium |
 | k8s-worker-1 | 10.98.68.11 | 3GiB | worker |
 | k8s-worker-2 | 10.98.68.12 | 3GiB | worker |
-| k8s-worker-3 | 10.98.68.16 | 3GiB | worker |
 
-- **HA 控制面端点**：Keepalived VIP `10.98.68.20:6443`（`group_data/k8s_test.py` 的 `control_plane_endpoint`），HAProxy 在每个 master 上把 VIP 转发到全部 apiserver；kubeadm `controlPlaneEndpoint` 与 Cilium `k8sServiceHost` 都用 VIP。apiserver 以 `bind-address` 绑本机 IP，与 HAProxy 互不冲突。
+- **单 master 布局**：`control_plane` 组只有 1 台，`deploy/_topology.py` 判为非 HA，退回经典单 master（无 Keepalived/HAProxy、kubeadm 端点即 master 自身 IP）。**HA 是可选能力**：在 `control_plane` 组追加 master 行即自动启用（Keepalived VIP + HAProxy 跑在 master 上），测试环境当前未启用。
 - **自动决策**：`deploy/_topology.py` 自定位 inventory（`host.groups` 的 `k8s_test` 自动组），`control_plane` 列表第一条 = bootstrap master、长度 >1 = HA、keepalived 优先级/HAProxy 后端由列表推导。清单加行即扩容，无需任何标志位。
-- 单点修改处：`config.py`（VM 规格，仅建机用）与 `inventories/k8s_test.py`（部署拓扑，唯一决策来源，IP 需与 config 一致）；Cilium chart/CLI 版本固定在 `scripts/k8s_download_offline.py`；k8s 版本跟随**宿主机本地 kubeadm**（`kubeadm config images list`，须与 pkgs.k8s.io 上游 RPM 同版本）。
+- 单点修改处：`config.py`（VM 规格 + 主/worker IP，建机与 inventory 的唯一事实来源）——`inventories/k8s_test.py` 直接 `import config` 派生，改拓扑只动 `config.py` 一处；Cilium chart/CLI 版本固定在 `scripts/k8s_download_offline.py`；k8s 版本跟随**宿主机本地 kubeadm**（`kubeadm config images list`，须与 pkgs.k8s.io 上游 RPM 同版本）。
 
 ### 组件来源
 
@@ -108,14 +105,14 @@ uv run pyinfra -y inventories/k8s_production.py deploy/k8s_join.py --limit worke
 - **容器镜像 + Cilium CLI/chart** → 离线包 `./offline`（images/ 预载到 containerd；`k8s_download_offline.py` 用 rsync 直接推到各节点 `/opt/k8s-offline`，不经 pyinfra）
 - **系统基础包** → 直连上游 NJU `almalinux/10/<RepoDir>/x86_64/os/` 规范布局（见 `config.ALMA_UPSTREAM_BASE`）：**全部 9 个仓库**（BaseOS/AppStream/CRB/extras/HighAvailability/NFV/RT/SAP/SAPHANA）。节点的 `almalinux-*.repo` **就地编辑**（`tasks/alma_repos.py`：注释 `mirrorlist`、baseurl 重指 NJU 且保留 URL 尾路径，注释过的 baseurl 一并启用），不再用 VM 模板整套下发；cloud-init（`incus/incus_vms.py`）建机时同样用 sed 先指向 NJU，保证首装 `dnf` 不出内网。`tasks/kubernetes_repo.py`/`tasks/docker_ce_repo.py` 是受管文件（`templates/`），baseurl 指向 pkgs.k8s.io / download.docker.com（gpgkey 分别取 `repodata/repomd.xml.key` 与 `linux/centos/gpg`）
 - **kube-proxy** → 不使用，由 **Cilium eBPF 完全替代**（kube-proxy free）。`kubeadm init` 加 `--skip-phases=addon/kube-proxy`，Cilium 以 `kubeProxyReplacement=true` + `k8sServiceHost/-Port` 安装（见 `deploy/k8s_init.py`），ClusterIP/NodePort/HostPort/masquerade 全走 eBPF，节点上不落任何 service 级 netfilter 规则。历史教训：曾先后尝试 kube-proxy 原生 nftables 模式（kubeadm v1beta4 `kubeProxy.config.mode: nftables`）与改 kube-proxy ConfigMap `mode: nftables`，实测均因 kube-proxy 的 nft 表与 Cilium netfilter 规则冲突导致 3 节点出站黑洞（`sudo nft delete table ip kube-proxy` 即恢复），故彻底去掉 kube-proxy 而非在其上纠缠模式。节点仍装 `iptables-nft` + `nftables`（满足 kubelet 内核依赖、提供 `nft` CLI 排查）
-- **HA 控制面 LB** → 仅在 control_plane 组多于 1 台时安装：`haproxy` + `keepalived`（`tasks/k8s_lb.py`，Alma 上游源）。Keepalived VRRP（unicast，优先级按清单顺序 200/150/100）持有 VIP，`notify_master/backup` 脚本只在 VIP 持有者上启停 HAProxy，避免与同机 apiserver 抢 `:6443`。apiserver 侧由 kubeadm 配置 `bind-address` 绑本机 IP（`templates/kubeadm.yaml.j2`）
+- **HA 控制面 LB** → 可选能力，仅在 control_plane 组多于 1 台时安装：`haproxy` + `keepalived`（`tasks/k8s_lb.py`，Alma 上游源）。Keepalived VRRP（unicast，优先级按清单顺序 200/150/100）持有 VIP，`notify_master/backup` 脚本只在 VIP 持有者上启停 HAProxy，避免与同机 apiserver 抢 `:6443`。apiserver 侧由 kubeadm 配置 `bind-address` 绑本机 IP（`templates/kubeadm.yaml.j2`）。单 master 集群全部跳过（`topology.ha` 为 False）
 
 ### 目录结构
 
 ```
 config.py                # 单一事实来源：测试环境拓扑/目录/VM 规格（上游源常量取自 mirror/config.py）
 inventories/             # pyinfra inventory：Host Name + Host Data（ssh_hostname/ssh_user/repos 子集）
-  k8s_test.py            #   测试集群（control_plane / workers / nodes）
+  k8s_test.py            #   测试集群（control_plane / workers / nodes），从 config.py 派生 IP
   k8s_production.py      #   生产集群（k8s-master1/k8s-worker1/k8s-worker2；可加仅需 alma 源的主机）
 group_data/              # pyinfra 组数据：镜像源唯一差异点
   all.py                 #   默认值（repos 子集 / apiserver_port / service_subnet / node_offline_dir）
@@ -192,7 +189,7 @@ just join        # 拉取 join 命令并加入 workers（依赖 join-cp）
 just verify      # 集群验证（依赖 join）
 ```
 
-**扩容即加行**：新增 worker → 在 `config.py` 的 `VMS` 与 `inventories/k8s_test.py` 的 `workers` 组各加一行（IP 一致），重跑 `just vm-create <名字>` + `just prepare` + `just join`。新增 master → 同样加进 `VMS` 与 `control_plane` 组，`just vm-create` + `just prepare` + `just join-cp`。bootstrap/HA/endpoint/优先级全部由 `deploy/_topology.py` 从清单自动推导，无需改脚本。
+**扩容即加行**：拓扑单一来源是 `config.py`（inventory 自动派生）。新增 worker → 在 `config.py` 的 `WORKER_IPS` 加一个 IP（`VMS` 同步加 VM 规格），重跑 `just vm-create <名字>` + `just prepare` + `just join`。新增 master → 在 `config.py` `VMS` 加规格、把该主机加进 `inventories/k8s_test.py` 的 `control_plane` 组（及 `group_data/k8s_test.py` 的 `control_plane_endpoint` 填 VIP），`just vm-create` + `just prepare` + `just join-cp`。bootstrap/HA/endpoint/优先级全部由 `deploy/_topology.py` 从清单自动推导，无需改脚本。
 
 生产环境复用同一套 recipe，仅 inventory 不同：`just offline --inventory inventories/k8s_production.py`、`uv run pyinfra -y inventories/k8s_production.py deploy/{repos,k8s_prepare,k8s_init,k8s_init_cp,k8s_join}.py`（见「生产环境」一节）。生产若启用 HA，同样先在 `group_data/k8s_production.py` 的 `control_plane_endpoint` 填一个空闲 VIP，再把附加 master 加进 `control_plane` 组。
 

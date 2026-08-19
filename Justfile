@@ -11,6 +11,10 @@ master_ip := `uv run python -c "import config; print(config.MASTER_IP)"`
 key := `echo "${SSH_KEY:-$HOME/.ssh/id_ed25519}"`
 offline_dir := env_var_or_default("OFFLINE_DIR", "offline")
 
+# Test-cluster inventory (single file-based inventory for the lab; production
+# passes its own via REPO_INVENTORY / --inventory).
+test_inv := "inventories/k8s_test.py"
+
 default:
     @just --list
 
@@ -37,25 +41,25 @@ vm-destroy vms="":
 # Extra flags pass through, e.g. `just offline --no-upload` or
 # `just offline --inventory inventories/k8s_production.py` for the production cluster.
 offline args="":
-    uv run python scripts/k8s_download_offline.py --inventory inventories/k8s_test.py {{ args }}
+    uv run python scripts/k8s_download_offline.py --inventory {{ test_inv }} {{ args }}
 
 # Point the servers' dnf sources where their Host Data / group_data say
 # (k8s_test = upstream, k8s_production = intranet mirror); per-host `repos`
 # subset respected. REPO_INVENTORY defaults to the k8s test cluster.
-repos inventory="inventories/k8s_test.py":
+repos inventory="{{ test_inv }}":
     uv run pyinfra -y {{ inventory }} deploy/repos.py
 
 # Prepare all nodes: kernel/swap/selinux, containerd, k8s RPMs (repos from
 # group_data/k8s_test.py = upstream), preload the offline images into containerd.
 # SSH user comes from Host Data; auth via the local ssh-agent / default keys.
 prepare: offline
-    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_prepare.py --limit nodes
+    uv run pyinfra -y {{ test_inv }} deploy/k8s_prepare.py --limit nodes
 
 # Bootstrap the control plane on the first master + install Cilium (offline
 # chart). Additional control planes self-skip (deploy/k8s_init.py gates to the
 # bootstrap node via deploy/_topology.py).
 init: prepare
-    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_init.py --limit control_plane
+    uv run pyinfra -y {{ test_inv }} deploy/k8s_init.py --limit control_plane
 
 # Join additional control-plane nodes (HA only; single-master clusters skip).
 # Fetches the control-plane join command from the bootstrap master (only present
@@ -67,14 +71,14 @@ join-cp: init
             {{ ssh_user }}@{{ master_ip }}:/etc/kubernetes/join-control-plane-command.txt \
             {{ offline_dir }}/join-control-plane-command.txt; \
     fi
-    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_init_cp.py --limit control_plane
+    uv run pyinfra -y {{ test_inv }} deploy/k8s_init_cp.py --limit control_plane
 
 # Fetch the join command from the master, then join the workers.
 join: join-cp
     scp -i {{ key }} -o StrictHostKeyChecking=accept-new \
         {{ ssh_user }}@{{ master_ip }}:/etc/kubernetes/join-command.txt \
         {{ offline_dir }}/join-command.txt
-    uv run pyinfra -y inventories/k8s_test.py deploy/k8s_join.py --limit workers
+    uv run pyinfra -y {{ test_inv }} deploy/k8s_join.py --limit workers
 
 # Verify the cluster: fetch the admin kubeconfig (the /etc/kubernetes/admin.conf
 # copy is 0600 root-only; ~admin/.kube/config is the identical admin-readable
