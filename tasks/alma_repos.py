@@ -16,8 +16,13 @@ mirror simply serves both x86_64 and x86_64_v2 paths.
 
 Data: ``alma_base`` (group data: NJU for the k8s test env, the intranet mirror
 for k8s production). Idempotent: once the baseurl points at alma_base the line
-no longer matches any known upstream and becomes a no-op; ``dnf clean all``
-only runs when an edit actually changed something.
+is skipped (no op is generated) and ``dnf clean all`` only runs when an edit
+actually changed something.
+
+Detection is structural, not a host whitelist: a baseurl whose path's first
+segment is ``almalinux`` (``scheme://host/almalinux``) is a mirror source and
+gets re-pointed at ``alma_base``; the vault debuginfo/source sections use
+``/vault/`` and are left alone, as is any non-mirror baseurl.
 """
 
 import re
@@ -27,17 +32,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pyinfra.context import host
-from pyinfra.facts.files import FindFiles
+from pyinfra.facts.files import FileContents, FindFiles
 from pyinfra.operations import files, server
 
-# Upstream bases the transform understands. When a baseurl already points at
-# one of these it is re-pointed at alma_base; anything else (e.g. the vault
-# debuginfo/source sections) is left alone.
-KNOWN_UPSTREAMS = (
-    "https://repo.almalinux.org/almalinux",
-    "https://mirrors.nju.edu.cn/almalinux",
-    "https://mirrors.aliyun.com/almalinux",
-)
+# Mirror-source format shared by every Alma mirror: scheme://host/almalinux.
+# Group 1 is the ``scheme://host/almalinux`` prefix used as the replace target
+# (the URL tail is preserved by matching only this prefix).
+MIRROR_SOURCE_RE = re.compile(r"^(https?://[^/]+/almalinux)(?=/|$)")
 
 alma_base = host.data.alma_base
 
@@ -56,14 +57,18 @@ for fname in sorted(Path(p).name for p in opfiles):
             _sudo=True,
         )
     )
-    for upstream in KNOWN_UPSTREAMS:
-        if upstream == alma_base:
+    for line in host.get_fact(FileContents, path=path) or []:
+        m = re.match(r"^[ \t]*#?[ \t]*baseurl[ \t]*=[ \t]*(\S+)", line)
+        if not m:
+            continue
+        src = MIRROR_SOURCE_RE.match(m.group(1))
+        if not src or m.group(1).startswith(alma_base):
             continue
         edit_ops.append(
             files.replace(
                 name=f"[{host.name}] {fname}: baseurl host -> {alma_base}",
                 path=path,
-                text=rf"^[ \t]*#?[ \t]*baseurl[ \t]*=[ \t]*{re.escape(upstream)}",
+                text=rf"^[ \t]*#?[ \t]*baseurl[ \t]*=[ \t]*{re.escape(src.group(1))}",
                 replace=f"baseurl={alma_base}",
                 extended_regex=True,
                 _sudo=True,
