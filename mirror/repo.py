@@ -1,4 +1,4 @@
-"""Provision the intranet RPM mirror (192.168.90.201, ssh alias `mirror`).
+"""Provision the intranet RPM mirror ({MIRROR_HOST}, ssh alias `mirror`).
 
 Reproduces the current real deployment exactly (verified converged, zero-change
 on the live mirror):
